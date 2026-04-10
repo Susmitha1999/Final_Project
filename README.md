@@ -49,3 +49,21 @@ differently from others even with the same hybrid. Together with soil properties
 of what drives yield variation across 43 sites and 10 years.
 
 
+## Data Merging
+
+1. I pulled Daymet weather for all 66 site-years across both training and testing using the longitude and latitude from the meta file. 
+This gave daily records for each site and year which I then summarised into eight site-year level variables, growing season GDD, total precipitation, 
+mean maximum and minimum temperature, mean solar radiation, mean vapor pressure, and heat stress days. 
+Elevation was downloaded once per site and joined on site alone since it does not change over time.
+
+2. I then merged all sources into a single training and testing dataset. Trait, meta, soil, weather, and elevation were joined sequentially 
+using site and year as keys. A few cleaning steps were needed along the way, the meta file had three duplicate site-years which I removed before joining, 
+and the soil file had site names stored with the year appended, which I stripped before the join.
+
+3. The final training dataset has 164,477 rows and 24 columns. The final testing dataset has 10,057 rows and 19 columns, 
+with yield as NA since that is what the model will predict.
+
+4. One issue I noted is that soil data is partially missing in training, 2014 has no soil data at all, 
+and coverage varies across sites in later years. This is a data availability issue rather than a join error. 
+Since XGBoost handles missing values natively, I left these as is for now and will revisit during feature engineering if needed.
+

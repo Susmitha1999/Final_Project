@@ -12,13 +12,16 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Libraries
 
-```{r, warning=FALSE}
+```{r, warning=FALSE, message=FALSE}
 
 library(daymetr)
 library(elevatr)
 library(sf)
 library(dplyr)
 library(readr)
+library(purrr)
+library(lubridate)
+library(janitor)
 
 ```
 
@@ -110,3 +113,126 @@ n_distinct(training_meta$year)
 intersect(training_meta$site, testing_meta$site)
 
 ```
+
+# Data Merging 
+
+## Unique site locations
+
+```{r, message=FALSE}
+
+all_meta <- bind_rows(training_meta, testing_meta) %>%
+  distinct(site, year, longitude, latitude)
+
+site_locations <- all_meta %>%
+  distinct(site, longitude, latitude)
+```
+
+## Dayment weather for all sites and years
+
+```{r, message=FALSE}
+pull_daymet <- function(site, lat, lon, yr) {
+  message("Downloading: ", site, " | ", yr)
+  tryCatch({
+    dm <- download_daymet(
+      site     = paste0(site, "_", yr),
+      lat      = lat,
+      lon      = lon,
+      start    = yr,
+      end      = yr,
+      internal = TRUE,
+      silent   = TRUE
+    )
+    dm$data %>%
+      mutate(site = site, year = yr)
+  }, error = function(e) NULL)
+}
+
+# Pull for every site-year combination
+weather_daily <- pmap_dfr(
+  list(
+    site = all_meta$site,
+    lat  = all_meta$latitude,
+    lon  = all_meta$longitude,
+    yr   = all_meta$year
+  ),
+  pull_daymet
+)
+
+names(weather_daily)
+
+weather_daily <- weather_daily %>%
+  rename(
+    tmax = `tmax..deg.c.`,
+    tmin = `tmin..deg.c.`,
+    prcp = `prcp..mm.day.`,
+    srad = `srad..W.m.2.`,
+    vp   = `vp..Pa.`
+  ) %>%
+  mutate(date = as.Date(paste(year, yday, sep = "-"), "%Y-%j"))
+
+weather_summary <- weather_daily %>%
+  group_by(site, year) %>%
+  summarise(
+    gdd_season       = sum(pmax(((pmin(tmax, 30) + pmax(tmin, 10)) / 2) - 10, 0), na.rm = TRUE),
+    prcp_total_mm    = sum(prcp,        na.rm = TRUE),
+    tmax_mean        = mean(tmax,       na.rm = TRUE),
+    tmin_mean        = mean(tmin,       na.rm = TRUE),
+    srad_mean        = mean(srad,       na.rm = TRUE),
+    vp_mean          = mean(vp,         na.rm = TRUE),
+    heat_stress_days = sum(tmax > 32,   na.rm = TRUE),
+    .groups = "drop"
+  )
+
+```
+
+## Download elevation data
+```{r, message=FALSE}
+
+sites_sf <- st_as_sf(
+  site_locations,
+  coords = c("longitude", "latitude"),
+  crs    = 4326
+)
+
+elev_raw <- get_elev_point(sites_sf, prj = 4326, src = "aws", z = 5)
+
+elevation <- elev_raw %>%
+  st_drop_geometry() %>%
+  select(site, elevation)
+```
+
+## Merge Data
+```{r, message=FALSE, warning=FALSE}
+
+# Training data
+training_final <- training_trait %>%
+  left_join(training_meta %>% distinct(site, year, .keep_all = TRUE), by = c("site", "year")) %>%
+  left_join(training_soil %>% mutate(site = gsub("_\\d{4}$", "", site)) %>% distinct(site, year, .keep_all = TRUE), by = c("site", "year")) %>%
+  left_join(weather_summary, by = c("site", "year")) %>%
+  left_join(elevation %>% distinct(site, .keep_all = TRUE), by = "site")
+
+# Testing data
+testing_final <- testing_sub %>%
+  left_join(testing_meta %>% distinct(site, year, .keep_all = TRUE), by = c("site", "year")) %>%
+  left_join(testing_soil %>% mutate(site = gsub("_\\d{4}$", "", site)) %>% distinct(site, year, .keep_all = TRUE), by = c("site", "year")) %>%
+  left_join(weather_summary, by = c("site", "year"), relationship = "many-to-many") %>%
+  left_join(elevation %>% distinct(site, .keep_all = TRUE), by = "site")
+```
+
+## Save the data
+
+```{r}
+
+#glimpse(training_final)
+#glimpse(testing_final)
+
+# Missingness check
+colSums(is.na(training_final))
+colSums(is.na(testing_final))
+
+# Save
+write_csv(training_final, "../data/training/training_final.csv")
+write_csv(testing_final,  "../data/testing/testing_final.csv")
+
+```
+
