@@ -157,7 +157,7 @@ xgb_result$.metrics[[2]]
 #Select best models
 ```{r}
 # Based on lowest RMSE
-best_rmse <- xgb_res %>% 
+best_rmse <- xgb_result %>% 
   select_best(metric = "rmse")%>% 
   mutate(source = "best_rmse")
 
