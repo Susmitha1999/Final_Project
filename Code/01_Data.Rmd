@@ -22,6 +22,7 @@ library(readr)
 library(purrr)
 library(lubridate)
 library(janitor)
+library(tidyverse)
 
 ```
 
@@ -86,7 +87,7 @@ head(training_trait)
 #head(testing_soil)
 #head(testing_sub)
 
-# Existting columnx
+# Existing columns
 names(training_meta)    
 names(training_soil)    
 names(training_trait)   
@@ -234,5 +235,82 @@ colSums(is.na(testing_final))
 write_csv(training_final, "../data/training/training_final.csv")
 write_csv(testing_final,  "../data/testing/testing_final.csv")
 
+```
+
+
+#Data Cleaning
+
+##Load and clean data
+```{r}
+traindata <- read.csv("../data/training/training_final.csv")%>%
+  clean_names() %>%
+  distinct()
+
+traindata
+
+```
+
+## Check duplicate observations
+```{r}
+traindata %>%
+  count(site, year, hybrid, replicate, block) %>%
+  filter(n > 1)
+```
+
+```{r}
+#investigated further
+traindata %>%
+  filter(site == "ARH1",
+         year == 2016,
+         hybrid == "LH195/PHZ51",
+         replicate == 1,
+         block == 1)
+```
+
+##Aggregated the duplicate
+```{r}
+traindata <- traindata %>%
+  group_by(site, year, hybrid, replicate, block) %>%
+  summarise(
+    yield_mg_ha = mean(yield_mg_ha, na.rm = TRUE),
+    grain_moisture = mean(grain_moisture, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+traindata
+```
+
+##confirming no duplicates
+```{r}
+#There should be zero rows if no duplicate
+traindata %>%
+  count(site, year, hybrid, replicate, block) %>%
+  filter(n > 1)
+```
+```{r}
+traindata
+
+
+```
+
+```{r}
+train1 <- read.csv("../data/training/training_trait.csv")%>%
+  clean_names() %>%
+  distinct()
+```
+
+
+```{r}
+train1 %>%
+  count(site, year, hybrid, replicate, block) %>%
+  filter(n > 1)
+```
+```{r}
+train1 %>%
+  filter(site == "ARH1",
+         year == 2016,
+         hybrid == "LH195/PHZ51",
+         replicate == 1,
+         block == 1)
 ```
 
