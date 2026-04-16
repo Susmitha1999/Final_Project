@@ -1,0 +1,170 @@
+
+```{r}
+#| message: false
+#| warning: false
+install.packages("xgboost") #new pacakage
+install.packages("doParallel") #new pacakage
+library(tidymodels)   # Core framework for modeling (includes recipes, workflows, parsnip, etc.)
+library(finetune)     # Additional tuning strategies (e.g., racing, ANOVA-based tuning)
+library(vip)          # For plotting variable importance from fitted models
+library(xgboost)      # XGBoost implementation in R
+library(ranger)       # Fast implementation of Random Forests
+library(tidyverse)    # Data wrangling and visualization
+library(doParallel)   # For parallel computing (useful during resampling/tuning)
+library(caret)       # Other great library for Machine Learning 
+```
+#Load data
+
+```{r}
+data <- read.csv("../data/training/training_final.csv") %>%
+  clean_names()
+
+```
+
+#Pre-processing
+
+```{r}
+set.seed(931)
+data_split <- initial_split(
+  data, 
+  prop = .7, 
+  strata = yield_mg_ha  # Stratify by target variable
+  )
+
+data_split
+```
+
+##data split
+
+```{r}
+data_train <- training(data_split)  # 70% of data
+data_train #Training data frame
+```
+
+
+```{r}
+data_test <- testing(data_split)  # 30% of data
+data_test #Testing data frame
+```
+
+
+##Distribution of target variable
+```{r}
+ggplot() +
+  geom_density(data = data_train, 
+               aes(x = yield_mg_ha),
+               color = "red") +
+  geom_density(data = data_test, 
+               aes(x = yield_mg_ha),
+               color = "blue")
+```
+
+
+##Creating Recipe
+```{r}
+xgb_recipe <- recipe(y ~ ., data = data_train) %>%
+step_rm(
+    year,       # Remove year identifier
+    site,       # Remove site identifier
+)
+
+xgb_recipe
+
+```
+
+```{r}
+# Prep the recipe to estimate any required statistics
+xgp_prep <- xgp_recipe %>% 
+  prep()
+
+# Examine preprocessing steps
+xgb_prep
+```
+
+
+#Training model
+##Model Specification
+
+```{r}
+xgb_model <- boost_tree(
+  trees = tune(),
+  tree_depth = tune(),
+  min_n = tune(),
+  learn_rate = tune(),
+  loss_reduction = tune(),
+  sample_size = tune(),
+  mtry = tune()
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")  
+
+xgb_model
+```
+
+##Cross Validation Setup
+```{r}
+set.seed(250)
+# Create 10-fold cross-validation resampling object from training data
+resampling_foldcv <- vfold_cv(traindata, 
+                              v = 10)
+
+resampling_foldcv
+resampling_foldcv$splits[[1]]
+```
+
+##Hyperparameter grid with Latin Hypercube Sampling
+```{r}
+xgb_grid <- grid_latin_hypercube(
+  tree_depth(), 
+  min_n(),
+  learn_rate(),
+  trees(),
+  size = 100 
+)
+
+xgb_grid
+```
+
+
+```{r}
+ggplot(data = xgb_grid,
+       aes(x = tree_depth, 
+           y = min_n)) +
+  geom_point(aes(color = factor(learn_rate),
+                 size = trees),
+             alpha = .5,
+             show.legend = FALSE)
+```
+
+#Model Tuning
+```{r}
+set.seed(7644)
+registerDoParallel(cores = parallel::detectCores() -1)
+
+xgb_result <- tune_race_anova(object = xgb_model,
+                      preprocessor = xgb_recipe,
+                      resamples = resampling_foldcv,
+                      grid = xgb_grid,
+                      control = control_race(save_pred = TRUE))
+
+stopImplicitCluster()
+
+
+beepr::beep()
+xgb_result$.metrics[[2]]
+```
+
+#Select best models
+```{r}
+# Based on lowest RMSE
+best_rmse <- xgb_res %>% 
+  select_best(metric = "rmse")%>% 
+  mutate(source = "best_rmse")
+
+best_rmse
+```
+
+```{r}
+
+```
+
