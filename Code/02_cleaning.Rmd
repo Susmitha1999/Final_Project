@@ -1,0 +1,464 @@
+---
+title: "02_cleaning"
+output: html_document
+date: "2026-04-16"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+#Libraries
+
+```{r, warning=FALSE, message=FALSE}
+
+library(daymetr)
+library(elevatr)
+library(sf)
+library(dplyr)
+library(readr)
+library(purrr)
+library(lubridate)
+library(janitor)
+library(tidyverse)
+
+```
+
+
+# Load Data
+
+```{r}
+
+training <- read_csv("../data/training/training_final.csv")
+testing  <- read_csv("../data/testing/testing_final.csv")
+
+```
+
+# Missingness
+
+```{r}
+colSums(is.na(training))
+```
+
+## Latitude and Longitde missingness
+
+```{r}
+
+training %>%
+     filter(is.na(longitude)) %>%
+     distinct(site)
+
+```
+
+These are real trail sites, the coordinates are fixed. So, we can take these sites information from other years and can use it here. And I am thinking to use the IAH1 to all IAH1a,IAH1b,IAH1c because they maybe in still same location but secondary site. Similar to TXH1. 
+
+```{r}
+
+site_coords <- training %>%
+  filter(!is.na(longitude)) %>%
+  group_by(site) %>%
+  summarise(
+    longitude = median(longitude, na.rm = TRUE),
+    latitude  = median(latitude,  na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# verify one row per site
+nrow(site_coords)
+n_distinct(site_coords$site)
+
+#site_coords %>% filter(str_detect(site, "TXH1|IAH1|TXH4"))
+
+# Now, using these to fill in our dataset
+training_2 <- training%>%
+  mutate(
+    longitude = case_when(
+      site %in% c("IAH1a", "IAH1b", "IAH1c") ~ -91.5,
+      site %in% c("TXH1-Dry", "TXH1-Early", "TXH1-Late") ~ -96.4,
+      TRUE ~ longitude
+    ),
+    latitude = case_when(
+      site %in% c("IAH1a", "IAH1b", "IAH1c") ~ 41.2,
+      site %in% c("TXH1-Dry", "TXH1-Early", "TXH1-Late") ~ 30.5,
+      TRUE ~ latitude
+    )
+  ) %>%
+  filter(!is.na(longitude))
+
+#Verify
+colSums(is.na(training_2[, c("longitude", "latitude")]))
+
+```
+
+## Weather data missingness
+
+```{r}
+
+#which site years are missing weather 
+training_2 %>%
+  filter(is.na(gdd_season)) %>%
+  distinct(year, site, longitude, latitude)
+
+```
+
+Here, these are missing because we don't have coordinates before, but now we imputed them we can pull this from daymet data. 
+
+```{r, warning=FALSE, message=FALSE}
+
+# get the missing site-years with their now-filled coords
+missing_weather <- training_2%>%
+  filter(is.na(gdd_season)) %>%
+  distinct(site, year, latitude, longitude)
+
+
+pull_daymet <- function(site, lat, lon, yr) {
+  message("Downloading: ", site, " | ", yr)
+  tryCatch({
+    dm <- download_daymet(
+      site     = paste0(site, "_", yr),
+      lat      = lat,
+      lon      = lon,
+      start    = yr,
+      end      = yr,
+      internal = TRUE,
+      silent   = TRUE
+    )
+    dm$data %>%
+      mutate(site = site, year = yr)
+  }, error = function(e) NULL)
+}
+
+# pull only missing site-years
+weather_daily_new <- pmap_dfr(
+  list(
+    site = missing_weather$site,
+    lat  = missing_weather$latitude,
+    lon  = missing_weather$longitude,
+    yr   = missing_weather$year
+  ),
+  pull_daymet
+)
+
+# same processing as before
+weather_summary_new <- weather_daily_new %>%
+  rename(
+    tmax = `tmax..deg.c.`,
+    tmin = `tmin..deg.c.`,
+    prcp = `prcp..mm.day.`,
+    srad = `srad..W.m.2.`,
+    vp   = `vp..Pa.`
+  ) %>%
+  mutate(date = as.Date(paste(year, yday, sep = "-"), "%Y-%j")) %>%
+  group_by(site, year) %>%
+  summarise(
+    gdd_season       = sum(pmax(((pmin(tmax, 30) + pmax(tmin, 10)) / 2) - 10, 0), na.rm = TRUE),
+    prcp_total_mm    = sum(prcp,        na.rm = TRUE),
+    tmax_mean        = mean(tmax,       na.rm = TRUE),
+    tmin_mean        = mean(tmin,       na.rm = TRUE),
+    srad_mean        = mean(srad,       na.rm = TRUE),
+    vp_mean          = mean(vp,         na.rm = TRUE),
+    heat_stress_days = sum(tmax > 32,   na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# fill into training_final
+weather_vars <- c("gdd_season", "prcp_total_mm", "tmax_mean",
+                  "tmin_mean", "srad_mean", "vp_mean", "heat_stress_days")
+
+training_3 <- training_2 %>%
+  left_join(weather_summary_new, by = c("site", "year"), suffix = c("", "_new")) %>%
+  mutate(across(all_of(weather_vars),
+                ~ ifelse(is.na(.), get(paste0(cur_column(), "_new")), .))) %>%
+  select(-ends_with("_new"))
+
+# verify
+colSums(is.na(training_3[, weather_vars]))
+
+```
+
+Still has NA's let's check what site we have NA's now.
+
+```{r}
+
+training_3 %>%
+     filter(is.na(gdd_season)) %>%
+     distinct(site, year)
+```
+
+GEH1 is for Germany, but Daymet only covers for North America only so it failed for this location. Let's check whether we have any other coordinates that are outside of North America. 
+
+
+```{r}
+
+training_3 %>%
+  distinct(site, longitude, latitude) %>%
+  mutate(
+    in_us = longitude >= -125 & longitude <= -65 &
+            latitude  >=   24 & latitude  <=   50
+  ) %>%
+  filter(!in_us)
+
+```
+This shows we have only one. So we can drop this observations. 
+
+```{r}
+
+training_4 <- training_3 %>%
+  filter(site != "GEH1")
+
+colSums(is.na(training_4[, weather_vars]))
+
+```
+
+## Soil data missingness 
+
+```{r}
+
+#missingness for each site
+training_4 %>%
+  group_by(site) %>%
+  summarise(across(all_of(c("soilpH", "om_pct", "soilk_ppm", "soilp_ppm")),
+                   ~ sum(is.na(.)))) %>%
+  filter(if_any(-site, ~ . > 0))
+
+```
+
+Different missingness for different sites here, we can go for site-level median first and then global median as fallabck for any sites with no soil data at all. 
+
+**Site-level median** is simple, fast, and defensible. Soil properties are relatively stable within a site across years, pH and organic matter don't change dramatically year to year, so borrowing from the same site's other years sounds good. The risk is if a site has no soil measurements at all, median gives  nothing (we can go for global median for this case)
+
+```{r}
+
+soil_vars <- c("soilpH", "om_pct", "soilk_ppm", "soilp_ppm")
+
+# global medians as fallback
+global_medians <- training_4 %>%
+  summarise(across(all_of(soil_vars), ~ median(., na.rm = TRUE)))
+
+training_5 <- training_4 %>%
+  group_by(site) %>%
+  mutate(across(all_of(soil_vars),
+                ~ ifelse(is.na(.), median(., na.rm = TRUE), .))) %>%
+  ungroup() %>%
+  mutate(
+    soilpH    = ifelse(is.na(soilpH),    global_medians$soilpH,    soilpH),
+    om_pct    = ifelse(is.na(om_pct),    global_medians$om_pct,    om_pct),
+    soilk_ppm = ifelse(is.na(soilk_ppm), global_medians$soilk_ppm, soilk_ppm),
+    soilp_ppm = ifelse(is.na(soilp_ppm), global_medians$soilp_ppm, soilp_ppm)
+  )
+
+colSums(is.na(training_5[, soil_vars]))
+
+```
+
+## Elevation data missingness
+
+```{r}
+
+training_5 %>%
+  group_by(site) %>%
+  summarise(elevation_na = sum(is.na(elevation))) %>%
+  filter(elevation_na > 0)
+
+```
+
+These are cordinates issue which are missing before but now we have them. 
+
+```{r}
+
+training_5 %>%
+  filter(site %in% c("IAH1", "TXH1")) %>%
+  distinct(site, elevation)
+
+```
+
+Now, we have elevation for this data, so we can borrow from them now. And doing same thing as coordinates that filling them with the IAH1's. 
+
+```{r}
+
+parent_elevation <- training_5 %>%
+  filter(site %in% c("IAH1", "TXH1")) %>%
+  group_by(site) %>%
+  summarise(elevation = median(elevation, na.rm = TRUE))
+
+training_6 <- training_5 %>%
+  mutate(elevation = case_when(
+    site %in% c("IAH1a", "IAH1b", "IAH1c") ~ parent_elevation$elevation[parent_elevation$site == "IAH1"],
+    site %in% c("TXH1-Dry", "TXH1-Early", "TXH1-Late") ~ parent_elevation$elevation[parent_elevation$site == "TXH1"],
+    TRUE ~ elevation
+  ))
+
+colSums(is.na(training_6[, "elevation"]))
+
+```
+
+## Full Missingness check
+```{r}
+
+colSums(is.na(training_6))
+
+```
+date_harvested is fine, it's not modeling feature. Previous crop has missingness, is this categorical feature? 
+
+## Previous Crop Missingness
+```{r}
+training_6 %>%
+  count(previous_crop, sort = TRUE)
+```
+
+Few things to notice here, there are inconsistencies within same variables(eg: Soyabean vs Soyabeans). Let's fix those and give unknown category to NA's. 
+
+```{r}
+
+training_6 <- training_6 %>%
+  mutate(previous_crop = str_trim(str_to_lower(previous_crop)),
+         previous_crop = case_when(
+           str_detect(previous_crop, "soybean|soya") ~ "soybean",
+           str_detect(previous_crop, "corn")         ~ "corn",
+           str_detect(previous_crop, "wheat")        ~ "wheat",
+           str_detect(previous_crop, "sorghum")      ~ "sorghum",
+           str_detect(previous_crop, "cotton")       ~ "cotton",
+           str_detect(previous_crop, "peanut")       ~ "peanut",
+           str_detect(previous_crop, "sugar beet")   ~ "sugar beet",
+           str_detect(previous_crop, "fallow")       ~ "fallow",
+           str_detect(previous_crop, "rye")          ~ "rye",
+           str_detect(previous_crop, "lima")         ~ "other",
+           str_detect(previous_crop, "cereal")       ~ "other",
+           is.na(previous_crop)                      ~ "unknown",
+           TRUE                                      ~ previous_crop
+         ),
+         previous_crop = as.factor(previous_crop))
+
+training_6 %>% count(previous_crop, sort = TRUE)
+
+```
+
+Now, it looks's clean.
+
+## Final Check
+
+```{r}
+colSums(is.na(training_6))
+```
+Missingness is sorted! 
+
+# Check for duplicates now
+
+```{r}
+
+# show duplicates 
+training_6 %>%
+  group_by(year, site, hybrid, replicate) %>%
+  filter(n() > 1) %>%
+  ungroup() %>%
+  arrange(year, site, hybrid, replicate) %>%
+  select(year, site, hybrid, replicate, block, yield_mg_ha, grain_moisture)
+
+```
+
+So 14,442 rows where the same year, site, hybrid, replicate has more than one entry.
+
+# Aggregating the yield and grain for same replicate and block 
+
+```{r}
+
+site_vars <- c("soilpH", "om_pct", "soilk_ppm", "soilp_ppm",
+               "gdd_season", "prcp_total_mm", "tmax_mean", "tmin_mean",
+               "srad_mean", "vp_mean", "heat_stress_days", "elevation",
+               "longitude", "latitude", "previous_crop")
+
+training_7 <- training_6 %>%
+  group_by(year, site, hybrid, replicate, block) %>%
+  summarise(
+    yield_mg_ha    = mean(yield_mg_ha,   na.rm = TRUE),
+    grain_moisture = mean(grain_moisture, na.rm = TRUE),
+    across(all_of(site_vars), first),
+    date_planted   = first(date_planted),
+    date_harvested = first(date_harvested),
+    .groups = "drop"
+  )
+
+# verify
+training_7 %>%
+  group_by(year, site, hybrid, replicate, block) %>%
+  filter(n() > 1) %>%
+  nrow()
+
+cat("Rows after resolving:", nrow(training_7), "\n")
+
+colSums(is.na(training_7))
+```
+Look's good. Checking the summary statistics.
+
+## Validation for range of values
+
+```{r}
+
+# yield and moisture
+summary(training_7[, c("yield_mg_ha", "grain_moisture")])
+
+# weather and soil
+summary(training_7[, c("gdd_season", "prcp_total_mm", "tmax_mean", "tmin_mean",
+                        "heat_stress_days", "soilpH", "om_pct", "soilk_ppm", "soilp_ppm",
+                        "elevation")])
+```
+
+Everything looks fine. Now, let's see string cleanups. This checks for leading, trailing, or double spaces in hybrid and site names.
+
+# String cleanup
+
+```{r}
+
+training_7 %>%
+  count(hybrid) %>%
+  filter(str_detect(hybrid, "\\s{2,}|^\\s|\\s$"))
+
+training_7 %>%
+  distinct(site) %>%
+  filter(str_detect(site, "\\s{2,}|^\\s|\\s$"))
+
+```
+
+Clean. Now, date parsing and column types
+
+# Date parsing, Column types
+
+```{r}
+
+# date parsing
+training_7 <- training_7 %>%
+  mutate(
+    date_planted   = as.Date(date_planted,   format = "%m/%d/%y"),
+    date_harvested = as.Date(date_harvested, format = "%m/%d/%y")
+  )
+
+# check invalid dates
+training_7 %>%
+  filter(!is.na(date_harvested) & date_harvested <= date_planted) %>%
+  nrow()
+
+
+# column types
+training_7 <- training_7 %>%
+  mutate(
+    year      = as.integer(year),
+    replicate = as.factor(replicate),
+    block     = as.factor(block),
+    hybrid    = as.character(hybrid),
+    site      = as.character(site)
+  )
+
+glimpse(training_7)
+
+```
+
+# Save Data
+
+```{r}
+
+write_csv(training_7, "../data/training/training_clean.csv")
+cat("Training cleaning complete:", nrow(training_7), "rows\n")
+
+```
+
