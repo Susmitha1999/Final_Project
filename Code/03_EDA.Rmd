@@ -1,0 +1,184 @@
+---
+title: "EDA"
+output: html_document
+date: "2026-04-17"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Libraries
+
+```{r}
+#| message: false
+#| warning: false
+
+
+
+# Loading packages
+library(tidyverse) # for data wrangling and plotting
+library(janitor) # clean column names
+library(lmerTest) # for mixed-effect modeling
+library(broom.mixed) # for residual diagnostics
+library(knitr) # for figure displaying
+library(nlme) # for non-linear modeling
+library(car)
+library(nlraa) # for starting value functions
+library(metrica) # for rmse
+
+```
+
+
+```{r}
+traindata <- read_csv("../data/training/training_clean.csv")
+
+traindata
+
+```
+
+#EDA
+```{r pressure, echo=FALSE}
+
+summary(traindata)
+
+names(traindata)
+```
+##Distribution of yield
+```{r}
+traindata %>%
+ggplot(aes(yield_mg_ha)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "white") +
+  labs(title = "Distribution of Yield (Mg/ha)")
+
+```
+Based on the plot above, we can see that yield values follow a fairly smooth bell-shaped pattern with most observations clustering around 10 Mg/ha. Then, it gradually decreases from the center point.
+
+##Density plot of yield
+```{r}
+traindata %>%
+ggplot(aes(yield_mg_ha)) +
+  geom_density(fill = "lightblue") +
+  labs(title = "Density Plot of Yield")
+
+```
+The density plot above also aligns with the distribution plot.  Now that we understand the overall distribution, the next step is to explore how yield changes across key predictors in the dataset. 
+
+##Yield by year
+```{r}
+#checking the yield by year
+traindata %>%
+  group_by(year) %>%
+  summarize(mean_yield = mean(yield_mg_ha, na.rm = TRUE)) %>%
+  ggplot(aes(year, mean_yield)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Mean Yield by Year")
+
+
+```
+From the plot, we can see noticeable year‑to‑year shifts in yield. There’s a clear dip in 2016, followed by a strong spike in 2019, and then another drop in 2020 before yields begin to climb again. This shows that yearly conditions play a key role in shaping overall yield performance.
+
+##Distribution of weather data
+```{r}
+#Creating some density plots to explore the weather data distributions.
+traindata%>%
+  pivot_longer(cols = prcp_total_mm:vp_mean) %>%
+  ggplot(aes (x = value)) +
+  geom_density() +
+  facet_wrap(~name, scales = "free")
+
+```
+Based on the plot above, we can see different patterns in the weather data distribution.
+
+##Distribution of soil data
+```{r}
+traindata%>%
+  pivot_longer(cols = soilpH:soilp_ppm) %>%
+  ggplot(aes (x = value)) +
+  geom_density() +
+  facet_wrap(~name, scales = "free")
+
+```
+
+Based on the plot above, we can see different patterns in the soil data distribution. Each soil variable has its own shape because some are tightly clustered while others are more spread out or skewed. These differences tell us that the soil environments across sites are not uniform, and certain nutrients vary much more than others. Now, the next step is to compare these soil characteristics with yield to see whether any of them show clear or nonlinear relationships with performance. 
+
+##Yield vs soil variables
+```{r}
+traindata %>%
+  pivot_longer(cols = soilpH:soilp_ppm) %>%
+  ggplot(aes(x = value, y = yield_mg_ha)) +
+  geom_point() +
+  geom_smooth() +
+  facet_wrap(~name, scales = "free") +
+  theme_minimal() +
+  labs(title = "Yield vs Soil Variables")
+```
+
+##Yield vs weather variables
+```{r}
+traindata %>%
+  pivot_longer(cols = prcp_total_mm:vp_mean) %>%
+  ggplot(aes(x = value, y = yield_mg_ha)) +
+  geom_point() +
+  geom_smooth() +
+  facet_wrap(~name, scales = "free") +
+  theme_minimal() +
+  labs(title = "Yield vs Weather Variables")
+
+```
+
+
+## Yield across Latitude and Longitude
+```{r}
+traindata%>%
+  ggplot(aes(longitude, latitude, color = yield_mg_ha)) +
+  geom_point(alpha = 0.6) +
+  scale_color_viridis_c() +
+  labs(title = "Spatial Distribution of Yield")
+
+```
+
+##Elevation vs yield
+```{r}
+traindata%>%
+  ggplot(aes(elevation, yield_mg_ha)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth() +
+  labs(title = "Elevation vs Yield")
+```
+
+Now that we’ve explored how yield behaves across soil, weather, spatial, and temporal variables, let's build the features that help the model capture those patterns without noise. One important piece is the timing information we already have for each site‑year, specifically the year of the trial and the days the crop was planted and harvested. These timing variables often explain a surprising amount of variation because they reflect differences in growing conditions, management decisions, and season length across environments. To capture this, we can convert year into a factor and extract day‑of‑year values for planting and harvest, along with the total length of the growing season.
+
+#feature engineering
+```{r}
+library(dplyr)
+library(lubridate)
+
+training_fe <- traindata %>%
+  mutate(
+    # Year as a factor
+    year_factor = as.factor(year),
+
+    # Convert planting and harvest dates to Date class
+    date_planted = as.Date(date_planted),
+    date_harvested = as.Date(date_harvested),
+
+    # Day of year for planting and harvest
+    doy_planted = yday(date_planted),
+    doy_harvested = yday(date_harvested),
+
+    # Season length (growing period)
+    season_length = doy_harvested - doy_planted
+  )
+
+training_fe
+```
+
+#Save featured data
+```{r}
+write_csv(training_fe,
+          "../data/training/training_fe.csv"
+          )
+```
+
