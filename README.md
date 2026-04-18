@@ -67,3 +67,9 @@ with yield as NA since that is what the model will predict.
 and coverage varies across sites in later years. This is a data availability issue rather than a join error. 
 Since XGBoost handles missing values natively, I left these as is for now and will revisit during feature engineering if needed.
 
+## Model Selection
+The EDA showed that yield is shaped by a combination of soil conditions, weather patterns, planting and harvest timing, and geographic differences across sites. 
+None of these relationships follow a straight line,  which is why XGboost and Catboost are a strong fit because they capture nonlinear patterns and complex
+interactions better without needing to specify them, making them well suited for the type of data we're working with. Also, Catboost is much helpful here 
+because it handles categorical data very well, like hybrid. 
+
