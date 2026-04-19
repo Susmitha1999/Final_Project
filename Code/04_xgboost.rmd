@@ -16,7 +16,7 @@ library(caret)       # Other great library for Machine Learning
 #Load data
 
 ```{r}
-data <- read.csv("../data/training/training_final.csv") %>%
+training <- read.csv("../data/training/training_fe.csv") %>%
   clean_names()
 
 ```
@@ -25,25 +25,24 @@ data <- read.csv("../data/training/training_final.csv") %>%
 
 ```{r}
 set.seed(931)
-data_split <- initial_split(
-  data, 
+training_split <- initial_split(training, 
   prop = .7, 
   strata = yield_mg_ha  # Stratify by target variable
   )
 
-data_split
+training_split
 ```
 
 ##data split
 
 ```{r}
-data_train <- training(data_split)  # 70% of data
+data_train <- training(training_split)  # 70% of data
 data_train #Training data frame
 ```
 
 
 ```{r}
-data_test <- testing(data_split)  # 30% of data
+data_test <- testing(training_split)  # 30% of data
 data_test #Testing data frame
 ```
 
@@ -62,23 +61,16 @@ ggplot() +
 
 ##Creating Recipe
 ```{r}
-xgb_recipe <- recipe(y ~ ., data = data_train) %>%
-step_rm(
-    year,       # Remove year identifier
-    site,       # Remove site identifier
-)
+xgb_recipe <- recipe(yield_mg_ha~ ., data = data_train) %>%
+  step_rm(date_planted, date_harvested) %>%   # remove raw dates
+  step_novel(all_nominal_predictors()) %>% 
+  step_dummy(all_nominal_predictors()) %>%    # convert factors to numeric
+  step_zv(all_predictors())%>%
+  step_normalize(all_numeric_predictors())
+
 
 xgb_recipe
 
-```
-
-```{r}
-# Prep the recipe to estimate any required statistics
-xgp_prep <- xgp_recipe %>% 
-  prep()
-
-# Examine preprocessing steps
-xgb_prep
 ```
 
 
@@ -105,7 +97,7 @@ xgb_model
 ```{r}
 set.seed(250)
 # Create 10-fold cross-validation resampling object from training data
-resampling_foldcv <- vfold_cv(traindata, 
+resampling_foldcv <- vfold_cv(data_train, 
                               v = 10)
 
 resampling_foldcv
@@ -115,11 +107,14 @@ resampling_foldcv$splits[[1]]
 ##Hyperparameter grid with Latin Hypercube Sampling
 ```{r}
 xgb_grid <- grid_latin_hypercube(
-  tree_depth(), 
+  tree_depth(),
   min_n(),
   learn_rate(),
+  loss_reduction(),
+  sample_size = sample_prop(),
+  finalize(mtry(), data_train),
   trees(),
-  size = 100 
+  size = 100
 )
 
 xgb_grid
@@ -153,6 +148,11 @@ stopImplicitCluster()
 beepr::beep()
 xgb_result$.metrics[[2]]
 ```
+#Review tuning results
+
+```{r}
+collect_metrics(xgb_result)
+```
 
 #Select best models
 ```{r}
@@ -165,6 +165,92 @@ best_rmse
 ```
 
 ```{r}
+# Based on lowers RMSE within 1% loss
+best_rmse_pct_loss <- xgb_result %>% 
+  select_by_pct_loss("min_n",
+                     metric = "rmse",
+                     limit = 1
+                     )%>% 
+  mutate(source = "best_rmse_pct_loss")
 
+best_rmse_pct_loss
+
+```
+
+
+```{r}
+# Based on lowest RMSE within 1 se
+best_rmse_one_std_err <- xgb_result %>% 
+  select_by_one_std_err(metric = "rmse",
+                        eval_time = 100,
+                        trees
+                        )%>% 
+  mutate(source = "best_rmse_one_std_err")
+
+best_rmse_one_std_err
+```
+
+```{r}
+# Based on greatest R2
+best_r2 <- xgb_result %>% 
+  select_best(metric = "rsq")%>% 
+  mutate(source = "best_r2")
+
+best_r2
+```
+
+
+```{r}
+# Based on lowers R2 within 1% loss
+best_r2_pct_loss <- xgb_result %>% 
+  select_by_pct_loss("min_n",
+                     metric = "rsq",
+                     limit = 1
+                     ) %>% 
+  mutate(source = "best_r2_pct_loss")
+
+best_r2_pct_loss
+```
+
+```{r}
+# Based on lowest R2 within 1 se
+best_r2_one_std_error <- xgb_result %>% 
+  select_by_one_std_err(metric = "rsq",
+                        eval_time = 100,
+                        trees
+                        ) %>%
+  mutate(source = "best_r2_one_std_error")
+
+best_r2_one_std_error
+```
+
+#Comparing and finalizing model
+```{r}
+best_rmse %>% 
+  bind_rows(best_rmse_pct_loss, 
+            best_rmse_one_std_err, 
+            best_r2, 
+            best_r2_pct_loss, 
+            best_r2_one_std_error)
+
+```
+
+
+#Final Specification
+```{r}
+final_spec <- boost_tree(
+  trees = best_r2$trees,           # Number of boosting rounds (trees)
+  tree_depth = best_r2$tree_depth, # Maximum depth of each tree
+  min_n = best_r2$min_n,           # Minimum number of samples to split a node
+  learn_rate = best_r2$learn_rate  # Learning rate (step size shrinkage)
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+final_spec
+```
+
+```{r}
+knitr::purl("04_xgboost.rmd", output = "04_xgboost_script.R", documentation = 0)
 ```
 
