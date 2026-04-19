@@ -31,6 +31,7 @@ library(metrica) # for rmse
 
 
 ```{r}
+
 traindata <- read_csv("../data/training/training_clean.csv")
 
 traindata
@@ -44,30 +45,35 @@ summary(traindata)
 
 names(traindata)
 ```
+
 ##Distribution of yield
 ```{r}
-traindata %>%
+p1 <- traindata %>%
 ggplot(aes(yield_mg_ha)) +
   geom_histogram(bins = 50, fill = "steelblue", color = "white") +
   labs(title = "Distribution of Yield (Mg/ha)")
+
+ggsave("../output/01_Distribution of Yield.png", plot = p1, width = 8, height = 5, dpi = 300)
 
 ```
 Based on the plot above, we can see that yield values follow a fairly smooth bell-shaped pattern with most observations clustering around 10 Mg/ha. Then, it gradually decreases from the center point.
 
 ##Density plot of yield
 ```{r}
-traindata %>%
+p2 <- traindata %>%
 ggplot(aes(yield_mg_ha)) +
   geom_density(fill = "lightblue") +
   labs(title = "Density Plot of Yield")
 
+ggsave("../output/02_Density Plot of Yield.png", plot = p2, width = 8, height = 5, dpi = 300)
 ```
 The density plot above also aligns with the distribution plot.  Now that we understand the overall distribution, the next step is to explore how yield changes across key predictors in the dataset. 
 
 ##Yield by year
 ```{r}
+
 #checking the yield by year
-traindata %>%
+p3 <- traindata %>%
   group_by(year) %>%
   summarize(mean_yield = mean(yield_mg_ha, na.rm = TRUE)) %>%
   ggplot(aes(year, mean_yield)) +
@@ -75,37 +81,66 @@ traindata %>%
   geom_point() +
   labs(title = "Mean Yield by Year")
 
+ggsave("../output/03_Mean Yield by Year.png", plot = p3, width = 8, height = 5, dpi = 300)
 
 ```
 From the plot, we can see noticeable year‑to‑year shifts in yield. There’s a clear dip in 2016, followed by a strong spike in 2019, and then another drop in 2020 before yields begin to climb again. This shows that yearly conditions play a key role in shaping overall yield performance.
 
+## Yield by site
+
+```{r}
+
+p4 <- traindata %>%
+  ggplot(aes(x = reorder(site, yield_mg_ha, median), y = yield_mg_ha)) +
+  geom_boxplot() +
+  coord_flip() +
+  labs(title = "Yield Distribution by Site")
+
+ggsave("../output/04_Yield Distribution by Site.png", plot = p4, width = 8, height = 5, dpi = 300)
+
+```
+
+## Yield by Previous Crop
+
+```{r}
+
+p5 <- traindata %>%
+  ggplot(aes(x = reorder(previous_crop, yield_mg_ha, median), y = yield_mg_ha)) +
+  geom_boxplot() +
+  labs(title = "Yield by Previous Crop")
+
+ggsave("../output/05_Yield by Previous Crop.png", plot = p5, width = 8, height = 5, dpi = 300)
+```
+
 ##Distribution of weather data
 ```{r}
 #Creating some density plots to explore the weather data distributions.
-traindata%>%
+p6 <- traindata%>%
   pivot_longer(cols = prcp_total_mm:vp_mean) %>%
   ggplot(aes (x = value)) +
   geom_density() +
   facet_wrap(~name, scales = "free")
 
+ggsave("../output/06_Distribution of weather data.png", plot = p6, width = 8, height = 5, dpi = 300)
 ```
 Based on the plot above, we can see different patterns in the weather data distribution.
 
 ##Distribution of soil data
 ```{r}
-traindata%>%
+p7 <- traindata%>%
   pivot_longer(cols = soilpH:soilp_ppm) %>%
   ggplot(aes (x = value)) +
   geom_density() +
   facet_wrap(~name, scales = "free")
 
+ggsave("../output/07_Distribution of soil data.png", plot = p7, width = 8, height = 5, dpi = 300)
 ```
 
 Based on the plot above, we can see different patterns in the soil data distribution. Each soil variable has its own shape because some are tightly clustered while others are more spread out or skewed. These differences tell us that the soil environments across sites are not uniform, and certain nutrients vary much more than others. Now, the next step is to compare these soil characteristics with yield to see whether any of them show clear or nonlinear relationships with performance. 
 
 ##Yield vs soil variables
 ```{r}
-traindata %>%
+p8 <- traindata %>%
   pivot_longer(cols = soilpH:soilp_ppm) %>%
   ggplot(aes(x = value, y = yield_mg_ha)) +
   geom_point() +
@@ -113,11 +148,13 @@ traindata %>%
   facet_wrap(~name, scales = "free") +
   theme_minimal() +
   labs(title = "Yield vs Soil Variables")
+
+ggsave("../output/08_Yield vs Soil Variables.png", plot = p8, width = 8, height = 5, dpi = 300)
 ```
 
 ##Yield vs weather variables
 ```{r}
-traindata %>%
+p9 <- traindata %>%
   pivot_longer(cols = prcp_total_mm:vp_mean) %>%
   ggplot(aes(x = value, y = yield_mg_ha)) +
   geom_point() +
@@ -126,29 +163,84 @@ traindata %>%
   theme_minimal() +
   labs(title = "Yield vs Weather Variables")
 
+ggsave("../output/09_Yield vs Weather Variables.png", plot = p9, width = 8, height = 5, dpi = 300)
+```
+
+## Yield vs GDD
+
+```{r}
+
+p10 <- traindata %>%
+  ggplot(aes(x = gdd_season, y = yield_mg_ha)) +
+  geom_point(alpha = 0.3, color = "steelblue") +
+  geom_smooth(method = "loess", color = "darkred") +
+  labs(title = "Yield vs Growing Degree Days",
+       x = "GDD (season total)",
+       y = "Yield (Mg/ha)") +
+  theme_minimal()
+
+ggsave("../output/10_Yield vs Growing Degree Days.png", plot = p10, width = 8, height = 5, dpi = 300)
 ```
 
 
 ## Yield across Latitude and Longitude
 ```{r}
-traindata%>%
+p11 <- traindata%>%
   ggplot(aes(longitude, latitude, color = yield_mg_ha)) +
   geom_point(alpha = 0.6) +
   scale_color_viridis_c() +
   labs(title = "Spatial Distribution of Yield")
 
+ggsave("../output/11_Spatial Distribution of Yield.png", plot = p11, width = 8, height = 5, dpi = 300)
 ```
 
 ##Elevation vs yield
 ```{r}
-traindata%>%
+p12 <- traindata%>%
   ggplot(aes(elevation, yield_mg_ha)) +
   geom_point(alpha = 0.6) +
   geom_smooth() +
   labs(title = "Elevation vs Yield")
+
+ggsave("../output/12_Elevation vs Yield.png", plot = p12, width = 8, height = 5, dpi = 300)
 ```
 
 Now that we’ve explored how yield behaves across soil, weather, spatial, and temporal variables, let's build the features that help the model capture those patterns without noise. One important piece is the timing information we already have for each site‑year, specifically the year of the trial and the days the crop was planted and harvested. These timing variables often explain a surprising amount of variation because they reflect differences in growing conditions, management decisions, and season length across environments. To capture this, we can convert year into a factor and extract day‑of‑year values for planting and harvest, along with the total length of the growing season.
+
+## Correlation Heatmap
+```{r}
+
+library(corrplot)
+
+corr_mat <- traindata %>%
+  select(yield_mg_ha, grain_moisture, gdd_season, prcp_total_mm,
+         tmax_mean, tmin_mean, srad_mean, vp_mean, heat_stress_days,
+         soilpH, om_pct, soilk_ppm, soilp_ppm, elevation) %>%
+  cor(use = "complete.obs")
+
+png("../output/13_Correlation_Heatmap.png", width = 8, height = 5, units = "in", res = 300)
+
+corrplot(corr_mat, method = "color", type = "upper", tl.cex = 0.7)
+
+dev.off()
+
+```
+
+## Hybrid Count distribution
+```{r}
+
+p14 <- traindata %>%
+  group_by(hybrid) %>%
+  summarise(n_sites = n_distinct(site)) %>%
+  count(n_sites) %>%
+  ggplot(aes(n_sites, n)) +
+  geom_col() +
+  labs(title = "How many sites does each hybrid appear in?")
+
+ggsave("../output/14_Hybrid Count distribution.png", plot = p14, width = 8, height = 5, dpi = 300)
+
+```
+
 
 #feature engineering
 ```{r}

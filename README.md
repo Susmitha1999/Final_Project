@@ -48,7 +48,6 @@ because weather explains why yield goes up or down from year to year at the same
 differently from others even with the same hybrid. Together with soil properties and hybrid identity, this gives the model a much richer picture 
 of what drives yield variation across 43 sites and 10 years.
 
-
 ## Data Merging
 
 1. I pulled Daymet weather for all 66 site-years across both training and testing using the longitude and latitude from the meta file. 
@@ -67,9 +66,47 @@ with yield as NA since that is what the model will predict.
 and coverage varies across sites in later years. This is a data availability issue rather than a join error. 
 Since XGBoost handles missing values natively, I left these as is for now and will revisit during feature engineering if needed.
 
+## Data Cleaning
+
+1. Identified sites missing coordinates; recovered by computing site-level median from other years where coordinates existed.
+
+2. Sub-trial variants IAH1a/b/c and TXH1-Dry/Early/Late assigned coordinates from parent sites IAH1 and TXH1. 
+Rows with no recoverable coordinates (TXH4) dropped.
+
+3. Site GEH1 (Germany) dropped — outside Daymet coverage. All remaining sites confirmed within continental US bounds.
+4. Re-pulled Daymet weather for 29 site-years that were missing weather due to previously missing coordinates.
+
+5. Soil variables (soilpH, om_pct, soilk_ppm, soilp_ppm) imputed using site-level medians; global median used as fallback for sites with no soil data in any year.
+
+6. Elevation for sub-trial variants borrowed from parent sites IAH1 and TXH1 using median elevation.
+
+7. previous_crop standardized — lowercased, trimmed, collapsed into clean categories (soybean, corn, wheat, sorghum, cotton, peanut, sugar beet, fallow, rye, other). 
+Missing values assigned explicit "unknown" factor level.
+
+8. True within-plot duplicates (same year + site + hybrid + replicate + block) resolved by averaging yield_mg_ha and grain_moisture. Replicate and block structure preserved.
+
+9. Range validation confirmed all numeric variables within agronomically plausible bounds — no rows filtered.
+
+10. Hybrid and site name columns checked for whitespace issues — none found.
+
+11. Dates parsed from %m/%d/%y format; zero invalid date pairs found.
+
+12. Column types coerced — year to integer, replicate and block to factor, previous_crop to factor, hybrid and site to character.
+
+##EDA Section
+
+## Model-1 XGBoost
+
+
+## Model-2 CatBoost
+
 ## Model Selection
 The EDA showed that yield is shaped by a combination of soil conditions, weather patterns, planting and harvest timing, and geographic differences across sites. 
 None of these relationships follow a straight line,  which is why XGboost and Catboost are a strong fit because they capture nonlinear patterns and complex
 interactions better without needing to specify them, making them well suited for the type of data we're working with. Also, Catboost is much helpful here 
 because it handles categorical data very well, like hybrid. 
 
+## Final Yield Prediction on 2024 data
+
+
+## R-Shiny dashboard
