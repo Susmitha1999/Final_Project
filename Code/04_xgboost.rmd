@@ -1,9 +1,19 @@
+---
+title: "Xgboost"
+output: html_document
+date: "2026-04-16"
+---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Packages
 ```{r}
 #| message: false
 #| warning: false
-install.packages("xgboost") #new pacakage
-install.packages("doParallel") #new pacakage
+#install.packages("xgboost") #new pacakage
+#install.packages("doParallel") #new pacakage
 library(tidymodels)   # Core framework for modeling (includes recipes, workflows, parsnip, etc.)
 library(finetune)     # Additional tuning strategies (e.g., racing, ANOVA-based tuning)
 library(vip)          # For plotting variable importance from fitted models
@@ -13,11 +23,12 @@ library(tidyverse)    # Data wrangling and visualization
 library(doParallel)   # For parallel computing (useful during resampling/tuning)
 library(caret)       # Other great library for Machine Learning 
 ```
+
 #Load data
 
 ```{r}
 training <- read.csv("../data/training/training_fe.csv") %>%
-  clean_names()
+  janitor::clean_names()
 
 ```
 
@@ -58,11 +69,19 @@ ggplot() +
                color = "blue")
 ```
 
+#removing raw dates before recipe
+```{r}
+data_train <- data_train %>% 
+  select(-date_planted, -date_harvested)
+
+data_test <- data_test %>% 
+  select(-date_planted, -date_harvested)
+```
+
 
 ##Creating Recipe
 ```{r}
 xgb_recipe <- recipe(yield_mg_ha~ ., data = data_train) %>%
-  step_rm(date_planted, date_harvested) %>%   # remove raw dates
   step_novel(all_nominal_predictors()) %>% 
   step_dummy(all_nominal_predictors()) %>%    # convert factors to numeric
   step_zv(all_predictors())%>%
@@ -92,7 +111,7 @@ xgb_model <- boost_tree(
 
 xgb_model
 ```
-
+This is the initial cross validation. The alternatives codes are below incase the model tuning run slow for you.
 ##Cross Validation Setup
 ```{r}
 set.seed(250)
@@ -148,6 +167,66 @@ stopImplicitCluster()
 beepr::beep()
 xgb_result$.metrics[[2]]
 ```
+
+Specified the alternatives codes below to tune the model faster
+#Alternative cross validation
+```{r}
+set.seed(250)
+# Create 5-fold cross-validation resampling object from training data
+resampling_foldcv2 <- vfold_cv(data_train, 
+                              v = 5)
+
+resampling_foldcv2
+resampling_foldcv2$splits[[1]]
+```
+
+
+#Alternative hyperparameter
+```{r}
+xgb_grid2 <- grid_space_filling(
+  tree_depth(range = c(3, 8)),
+  min_n(range = c(5, 40)),
+  learn_rate(range = c(0.01, 0.2)),
+  loss_reduction(),
+  sample_size = sample_prop(range = c(0.5, 0.9)),
+  finalize(mtry(), data_train),
+  trees(range = c(200, 800)),
+  size = 30
+)
+
+```
+
+#Faster parallel setting and racing control
+```{r}
+registerDoParallel(cores = 4)
+
+ctrl <- control_race(
+  save_pred = FALSE,
+  verbose_elim = TRUE,
+  parallel_over = "resamples"
+)
+
+
+```
+
+#Alternative model tuning
+```{r}
+set.seed(7645)
+
+xgb_result2 <- tune_race_anova(
+  object = xgb_model,
+  preprocessor = xgb_recipe,
+  resamples = resampling_foldcv2,
+  grid = xgb_grid2,
+  control = ctrl
+)
+
+stopImplicitCluster()
+beepr::beep()
+
+```
+
+
 #Review tuning results
 
 ```{r}
