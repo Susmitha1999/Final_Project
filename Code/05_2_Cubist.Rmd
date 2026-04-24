@@ -1,0 +1,259 @@
+---
+title: "05-2.2_Cubist"
+output: html_document
+date: "2026-04-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 05_cubist_model
+
+# Tuning: 20k subsample, 10-fold CV, regular grid search
+# Evaluation: 30% holdout
+# Final model: refit on full 2014-2023 data for 2024 predictions
+
+```{r}
+
+library(tidyverse)
+library(tidymodels)
+library(rules)
+library(Cubist)
+library(doParallel)
+```
+
+# Load data 
+```{r}
+
+training <- read_csv("../data/training/training_fe.csv")
+```
+
+# Prepare modeling dataset 
+```{r}
+
+training_model <- training %>%
+  mutate(
+    previous_crop = as.factor(previous_crop),
+    year          = as.integer(year)
+  ) %>%
+  drop_na()
+
+cat("Total rows for modeling:", nrow(training_model), "\n")
+```
+
+# Stratified 70/30 split by yield 
+```{r}
+
+set.seed(931)
+yield_split <- initial_split(training_model, prop = 0.70, strata = yield_mg_ha)
+
+train_data <- training(yield_split)
+test_data  <- testing(yield_split)
+
+cat("Train rows:", nrow(train_data), "\n")
+cat("Test rows:",  nrow(test_data),  "\n")
+
+train_tune <- train_data
+```
+
+# Recipe 
+```{r}
+
+# Cubist handles categoricals natively — no dummy encoding needed
+cubist_recipe <- recipe(yield_mg_ha ~ ., data = train_tune) %>%
+  step_rm(date_planted, date_harvested) %>%
+  step_zv(all_predictors())
+
+# verify levels after prep
+cat("Hybrid levels after step_other:",
+    cubist_recipe %>%
+      prep(training = train_tune) %>%
+      bake(new_data = NULL) %>%
+      pull(hybrid) %>%
+      n_distinct(), "\n")
+```
+
+# Model spec
+```{r}
+
+cubist_spec <- cubist_rules(
+  committees = tune(),
+  neighbors  = tune()
+) %>%
+  set_engine("Cubist") %>%
+  set_mode("regression")
+```
+
+# Workflow 
+```{r}
+
+cubist_wf <- workflow() %>%
+  add_recipe(cubist_recipe) %>%
+  add_model(cubist_spec)
+```
+
+# 10-fold CV on subsample stratified by yield 
+```{r}
+
+set.seed(123)
+folds <- vfold_cv(train_tune, v = 10, strata = yield_mg_ha)
+```
+
+# Regular grid 
+```{r}
+
+cubist_grid <- grid_regular(
+  committees(range = c(1, 20)),
+  neighbors(range  = c(0, 9)),
+  levels = 5
+)
+
+cat("Grid size:", nrow(cubist_grid), "combinations\n")
+```
+
+# Parallel backend 
+```{r}
+n_cores <- parallel::detectCores() - 1
+cat("Using", n_cores, "cores\n")
+registerDoParallel(cores = n_cores)
+```
+
+# Tune 
+```{r}
+
+cat("Starting tuning...\n")
+
+cubist_tune <- tune_grid(
+  cubist_wf,
+  resamples = folds,
+  grid      = cubist_grid,
+  metrics   = metric_set(rmse, rsq),
+  control   = control_grid(verbose = TRUE, save_pred = TRUE)
+)
+
+stopImplicitCluster()
+```
+
+# Tuning results 
+```{r}
+
+cat("Tuning complete. Best results:\n")
+show_best(cubist_tune, metric = "rmse")
+
+autoplot(cubist_tune)
+ggsave("../output/cubist_tuning_plot.png", width = 8, height = 5, dpi = 300)
+```
+
+# Select best parameters 
+```{r}
+
+best_params <- select_best(cubist_tune, metric = "rmse")
+cat("Best parameters:\n")
+print(best_params)
+```
+
+## Metrics on train dataset
+```{r}
+train_preds <- predict(eval_fit, train_data) %>%
+  bind_cols(train_data %>% select(yield_mg_ha))
+
+train_metrics <- train_preds %>% 
+  metrics(truth = yield_mg_ha, estimate = .pred)
+
+print(train_metrics)
+```
+
+
+# Evaluate on 30% holdout 
+```{r}
+
+# fit on full train_data with best params for honest evaluation
+eval_recipe <- recipe(yield_mg_ha ~ ., data = train_data) %>%
+  step_rm(date_planted, date_harvested) %>%
+  step_other(hybrid, threshold = 0.001) %>%
+  step_zv(all_predictors())
+
+eval_wf <- workflow() %>%
+  add_recipe(eval_recipe) %>%
+  add_model(finalize_model(cubist_spec, best_params))
+
+cat("Fitting evaluation model on train_data...\n")
+eval_fit <- fit(eval_wf, data = train_data)
+
+test_preds <- predict(eval_fit, test_data) %>%
+  bind_cols(test_data %>% select(yield_mg_ha))
+
+test_metrics <- test_preds %>%
+  metrics(truth = yield_mg_ha, estimate = .pred)
+
+cat("Holdout Test Performance:\n")
+print(test_metrics)
+```
+
+
+# Variable Importance
+```{r}
+# Variable Importance
+library(vip)
+
+cubist_vip <- eval_fit %>%
+  extract_fit_parsnip() %>%
+  vip(num_features = 20)
+
+cubist_vip
+
+ggsave("../output/cubist_vip.png", width = 8, height = 5, dpi = 300)
+
+# save importance scores as dataframe too
+cubist_importance <- eval_fit %>%
+  extract_fit_parsnip() %>%
+  vi()
+
+write_csv(cubist_importance, "../output/cubist_importance.csv")
+```
+
+
+# Predicted vs actual plot 
+```{r}
+
+test_preds %>%
+  ggplot(aes(x = yield_mg_ha, y = .pred)) +
+  geom_point(color = "steelblue",size = 0.5) +
+  geom_abline(slope = 1, intercept = 0, color = "darkred", linetype = "dashed") +
+  labs(title = "Cubist: Predicted vs Actual Yield",
+       x = "Actual Yield (Mg/ha)",
+       y = "Predicted Yield (Mg/ha)") +
+  theme_minimal()
+
+ggsave("../output/cubist_predicted_vs_actual.png", width = 8, height = 5, dpi = 300)
+```
+
+# Refit on FULL 2014-2023 data for 2024 predictions 
+```{r}
+
+cat("Refitting final model on full 2014-2023 data...\n")
+
+final_recipe <- recipe(yield_mg_ha ~ ., data = training_model) %>%
+  step_rm(date_planted, date_harvested) %>%
+  step_other(hybrid, threshold = 0.001) %>%
+  step_zv(all_predictors())
+
+final_cubist_wf <- workflow() %>%
+  add_recipe(final_recipe) %>%
+  add_model(finalize_model(cubist_spec, best_params))
+
+final_cubist_fit <- fit(final_cubist_wf, data = training_model)
+```
+
+# Save everything
+```{r}
+saveRDS(final_cubist_fit, "../output/cubist_final_model.rds")
+saveRDS(eval_fit,         "../output/cubist_eval_model.rds")
+saveRDS(cubist_tune,      "../output/cubist_tune_results.rds")
+write_csv(test_metrics,   "../output/cubist_test_metrics.csv")
+write_csv(train_metrics,   "../output/cubist_train_metrics.csv")
+
+cat("Cubist script complete\n")
+```
+

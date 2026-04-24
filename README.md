@@ -93,20 +93,87 @@ Missing values assigned explicit "unknown" factor level.
 
 12. Column types coerced — year to integer, replicate and block to factor, previous_crop to factor, hybrid and site to character.
 
-##EDA Section
+## EDA Section
 
 ## Model-1 XGBoost
 
 
-## Model-2 CatBoost
+## Model-2 Cubist
+
+**Model Selection**
+
+1. Originally planned to use Support Vector Machine (SVM) with RBF kernel as the second model.
+
+2. SVM was abandoned after running for 12+ hours on a 100GB HPC cluster node and completing only 11 of 250 tuning fits, computationally infeasible within the project timeline.
+
+3. Switched to Cubist, a rule-based regression model not covered in class, available via the rules package in tidymodels.
+
+**What is Cubist?**
+
+4. Cubist builds a set of if-then rules, each with a linear regression model at the leaf node.
+
+5. It combines the interpretability of decision trees with the predictive power of linear models.
+
+6. At prediction time, it optionally uses nearest-neighbor adjustments to refine predictions.
+
+7. Ensembling is done through committees, each successive committee corrects errors from the previous one, similar in spirit to boosting but fundamentally different from XGBoost's gradient-based approach.
+
+**Data Preparation**
+
+8. Loaded training_fe.csv with all engineered features.
+
+9. Coerced previous_crop to factor and year to integer; removed rows with any remaining NAs. Total rows used for modeling: 150,509.
+
+**Data Split**
+
+10. 70/30 stratified split by yield_mg_ha using set.seed(931) — same split as XGBoost for fair comparison. Train set: ~105,353 rows; Test set: ~45,156 rows.
+
+**Preprocessing**
+
+11. Removed date_planted and date_harvested, replaced by engineered DOY and season length features.
+
+12. All hybrid levels retained, step_zv() applied to remove zero-variance predictors.
+
+13. No dummy encoding or normalization applied, Cubist handles categorical variables natively.
+
+**Hyperparameter Tuning**
+
+14. Tuned two parameters: committees (range 1–20) and neighbors (range 0–9).
+
+15. Regular grid search with 5 levels each = 25 combinations total.
+
+16. 10-fold cross validation stratified by yield_mg_ha.
+
+17. Best model selected using RMSE as the selection metric.
+
+18. Tuning run on full 70% train_data (~105,353 rows) with parallelization across all available cores minus one.
+
+**Model Fitting**
+
+19. Best hyperparameters selected using select_best() on RMSE.
+
+20. Evaluation model fit on full 70% train_data with best parameters for honest holdout evaluation.
+
+21. Final model refit on complete 2014–2023 data (150,509 rows) for generating 2024 yield predictions.
+
+**Results**
+
+22. Tuning identified the best parameters as committees = 20 and neighbors = 9 based on lowest CV RMSE.
+
+23. On the 30% holdout test set, Cubist achieved RMSE of 1.86 Mg/ha, R² of 0.638, and MAE of 1.42 Mg/ha.
+
+24. On the training set, Cubist achieved RMSE of 1.72 Mg/ha, R² of 0.693, and MAE of 1.30 Mg/ha.
+
+25. The small train-test gap (RMSE difference of 0.14 Mg/ha, R² difference of 0.055) indicates the model generalizes well with minimal overfitting.
+
+26. Cubist explains approximately 64% of yield variance on unseen data across all sites, 10 years, and full hybrid diversity.
 
 ## Model Selection
-The EDA showed that yield is shaped by a combination of soil conditions, weather patterns, planting and harvest timing, and geographic differences across sites. 
-None of these relationships follow a straight line,  which is why XGboost and Catboost are a strong fit because they capture nonlinear patterns and complex
-interactions better without needing to specify them, making them well suited for the type of data we're working with. Also, Catboost is much helpful here 
-because it handles categorical data very well, like hybrid. 
+
 
 ## Final Yield Prediction on 2024 data
 
 
 ## R-Shiny dashboard
+
+

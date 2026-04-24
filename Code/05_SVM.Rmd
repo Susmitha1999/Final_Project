@@ -30,15 +30,6 @@ training <- read_csv("../data/training/training_fe.csv")
 ```{r}
 
 training_model <- training %>%
-  select(
-    yield_mg_ha,
-    gdd_season, prcp_total_mm, tmax_mean, tmin_mean,
-    srad_mean, vp_mean, heat_stress_days,
-    soilpH, om_pct, soilk_ppm, soilp_ppm,
-    elevation, longitude, latitude,
-    previous_crop, doy_planted, doy_harvested, season_length,
-    year
-  ) %>%
   mutate(
     previous_crop = as.factor(previous_crop),
     year          = as.integer(year)
@@ -46,16 +37,14 @@ training_model <- training %>%
   drop_na()
 
 cat("Total rows for modeling:", nrow(training_model), "\n")
-
 ```
-
 
 
 ## Stratified split by yield
 ```{r}
 
 set.seed(931)
-yield_split <- initial_split(training, prop = 0.70, strata = yield_mg_ha)
+yield_split <- initial_split(training_model, prop = 0.70, strata = yield_mg_ha)
 
 train_data <- training(yield_split)
 test_data  <- testing(yield_split)
@@ -69,8 +58,13 @@ cat("Test rows:",  nrow(test_data),  "\n")
 ```{r}
 
 svm_recipe <- recipe(yield_mg_ha ~ ., data = train_data) %>%
-  step_dummy(previous_crop) %>%
+  step_rm(date_planted, date_harvested) %>%
+  step_novel(all_nominal_predictors()) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_zv(all_predictors()) %>%
   step_normalize(all_numeric_predictors())
+
+svm_recipe
 
 ```
 
@@ -97,86 +91,42 @@ svm_wf <- workflow() %>%
   add_model(svm_spec)
 ```
 
+
+## 10 fold CV Stratified by yield
 ```{r}
-# 04_svm_model.R
-# SVM with RBF kernel for corn yield prediction
-# 70/30 stratified split by yield, 10-fold CV, regular grid search
-# Designed for HPC cluster (Sapelo2) — no subsampling
 
-library(tidyverse)
-library(tidymodels)
-library(kernlab)
-library(doParallel)
-
-# ── Load data ────────────────────────────────────────────────────────────────
-training <- read_csv("data/training/training_fe.csv")
-
-# ── Prepare modeling dataset ─────────────────────────────────────────────────
-training_model <- training %>%
-  select(
-    yield_mg_ha,
-    gdd_season, prcp_total_mm, tmax_mean, tmin_mean,
-    srad_mean, vp_mean, heat_stress_days,
-    soilpH, om_pct, soilk_ppm, soilp_ppm,
-    elevation, longitude, latitude,
-    previous_crop, doy_planted, doy_harvested, season_length,
-    year
-  ) %>%
-  mutate(
-    previous_crop = as.factor(previous_crop),
-    year          = as.integer(year)
-  ) %>%
-  drop_na()
-
-cat("Total rows for modeling:", nrow(training_model), "\n")
-
-# ── Stratified 70/30 split by yield ──────────────────────────────────────────
-set.seed(123)
-yield_split <- initial_split(training_model, prop = 0.70, strata = yield_mg_ha)
-
-train_data <- training(yield_split)
-test_data  <- testing(yield_split)
-
-cat("Train rows:", nrow(train_data), "\n")
-cat("Test rows:",  nrow(test_data),  "\n")
-
-# ── Recipe ───────────────────────────────────────────────────────────────────
-svm_recipe <- recipe(yield_mg_ha ~ ., data = train_data) %>%
-  step_dummy(previous_crop) %>%
-  step_normalize(all_numeric_predictors())
-
-# ── Model spec ───────────────────────────────────────────────────────────────
-svm_spec <- svm_rbf(
-  cost      = tune(),
-  rbf_sigma = tune()
-) %>%
-  set_engine("kernlab") %>%
-  set_mode("regression")
-
-# ── Workflow ──────────────────────────────────────────────────────────────────
-svm_wf <- workflow() %>%
-  add_recipe(svm_recipe) %>%
-  add_model(svm_spec)
-
-# ── 10-fold CV stratified by yield ───────────────────────────────────────────
 set.seed(123)
 folds <- vfold_cv(train_data, v = 10, strata = yield_mg_ha)
 
-# ── Regular grid ─────────────────────────────────────────────────────────────
+```
+
+
+## Regular grid 
+```{r}
+
 svm_grid <- grid_regular(
   cost(range      = c(-2, 5)),
-  rbf_sigma(range = c(-5, 0)),
+  rbf_sigma(range = c(-5, 0)), 
   levels = 5
 )
 
 cat("Grid size:", nrow(svm_grid), "combinations\n")
 
-# ── Parallel backend ──────────────────────────────────────────────────────────
+```
+
+## Parallel backend
+
+```{r}
+
 n_cores <- parallel::detectCores() - 1
 cat("Using", n_cores, "cores\n")
 registerDoParallel(cores = n_cores)
 
-# ── Tune ─────────────────────────────────────────────────────────────────────
+```
+
+## Tuning
+```{r}
+
 cat("Starting tuning...\n")
 
 svm_tune <- tune_grid(
@@ -189,26 +139,38 @@ svm_tune <- tune_grid(
 
 stopImplicitCluster()
 
-# ── Tuning results ────────────────────────────────────────────────────────────
+```
+
+## Tuning results
+```{r}
+
 cat("Tuning complete. Best results:\n")
 show_best(svm_tune, metric = "rmse")
 
 autoplot(svm_tune)
 ggsave("outputs/svm_tuning_plot.png", width = 8, height = 5, dpi = 300)
 
-# ── Select best parameters ────────────────────────────────────────────────────
+```
+
+## Final workflow
+```{r}
+
 best_params <- select_best(svm_tune, metric = "rmse")
 cat("Best parameters:\n")
 print(best_params)
 
-# ── Finalize workflow ─────────────────────────────────────────────────────────
 final_svm_wf <- finalize_workflow(svm_wf, best_params)
+```
 
-# ── Fit final model on full train_data ───────────────────────────────────────
+## Fit final model on train data
+```{r}
 cat("Fitting final model on full training set...\n")
 final_svm_fit <- fit(final_svm_wf, data = train_data)
 
-# ── Evaluate on holdout test set ──────────────────────────────────────────────
+```
+
+## Evaluate on holdout test set
+```{r}
 test_preds <- predict(final_svm_fit, test_data) %>%
   bind_cols(test_data %>% select(yield_mg_ha))
 
@@ -217,8 +179,13 @@ test_metrics <- test_preds %>%
 
 cat("Holdout Test Performance:\n")
 print(test_metrics)
+```
 
-# ── Predicted vs actual plot ──────────────────────────────────────────────────
+
+## Predicted vs Actual
+
+```{r}
+
 test_preds %>%
   ggplot(aes(x = yield_mg_ha, y = .pred)) +
   geom_point(alpha = 0.3, color = "steelblue") +
@@ -230,11 +197,22 @@ test_preds %>%
 
 ggsave("outputs/svm_predicted_vs_actual.png", width = 8, height = 5, dpi = 300)
 
-# ── Save model, metrics, tuning results ───────────────────────────────────────
+```
+
+## Save model metrics
+
+```{r}
 saveRDS(final_svm_fit,  "outputs/svm_final_model.rds")
 saveRDS(svm_tune,       "outputs/svm_tune_results.rds")
 write_csv(test_metrics, "outputs/svm_test_metrics.csv")
 
 cat("SVM script complete\n")
+```
+
+
+```{r}
+
+knitr::purl("05_SVM.Rmd", output = "05_SVM_script.R", documentation = 0)
+
 ```
 
