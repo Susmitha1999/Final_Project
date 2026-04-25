@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## 05_cubist_model
 
-# Tuning: 20k subsample, 10-fold CV, regular grid search
+# Tuning: full sample, 10-fold CV, regular grid search
 # Evaluation: 30% holdout
 # Final model: refit on full 2014-2023 data for 2024 predictions
 
@@ -214,6 +214,38 @@ write_csv(cubist_importance, "../output/cubist_importance.csv")
 ```
 
 
+## Residual plots
+```{r}
+
+#Residual by site
+test_preds %>% 
+  bind_cols(test_data %>% select(site, year)) %>% 
+  mutate(residual = yield_mg_ha - .pred) %>% 
+  group_by(site) %>%
+  summarise(mean_residual = mean(residual), rmse = sqrt(mean(residual ^2))) %>%
+  write.csv("../output/cubist_residuals_by_site.csv")
+
+#Residual by year
+test_preds %>% 
+  bind_cols(test_data %>% select(site, year)) %>% 
+  mutate(residual = yield_mg_ha - .pred) %>% 
+  group_by(year) %>%
+  summarise(mean_residual = mean(residual), rmse = sqrt(mean(residual ^2))) %>%
+  write.csv("../output/cubist_residuals_by_year.csv")
+
+#Full test predictions with site and year for Shiny
+test_preds %>%
+  bind_cols(test_data %>% select(site, year, hybrid)) %>% 
+  write.csv("../output/cubist_test_predictions.csv")
+
+#Full train predictions with site and year for Shiny
+predict(eval_fit, train_data) %>%
+  bind_cols(train_data %>% select(yield_mg_ha, site, year, hybrid)) %>% 
+  write.csv("../output/cubist_train_predictions.csv")
+
+```
+
+
 # Predicted vs actual plot 
 ```{r}
 
@@ -227,6 +259,7 @@ test_preds %>%
   theme_minimal()
 
 ggsave("../output/cubist_predicted_vs_actual.png", width = 8, height = 5, dpi = 300)
+
 ```
 
 # Refit on FULL 2014-2023 data for 2024 predictions 
@@ -244,10 +277,40 @@ final_cubist_wf <- workflow() %>%
   add_model(finalize_model(cubist_spec, best_params))
 
 final_cubist_fit <- fit(final_cubist_wf, data = training_model)
+
 ```
+
+## 2024 Predictions
+```{r}
+
+testing_pred <- testing %>%
+  mutate(
+    replicate = NA_real_, 
+    block = NA_real_, 
+    grain_moisture = NA_real_, 
+    date_planted = as.Date(NA), 
+    date_harvested = as.Date(NA), 
+    year_factor = NA_real_, 
+    doy_planted = NA_real_, 
+    doy_harvested = NA_real_,
+    season_length = NA_real_
+  )
+
+#predict using final model 
+predictions_2024 <- predict(final_cubist_fit, testing_pred) %>%
+  bind_cols(testing %>% select(year, site, hybrid))
+
+head(predictions_2024)
+sum(is.na(predictions_2024$.pred))
+
+write_csv(predictions_2024, "../output/testing_final_pred.csv")
+
+```
+
 
 # Save everything
 ```{r}
+
 saveRDS(final_cubist_fit, "../output/cubist_final_model.rds")
 saveRDS(eval_fit,         "../output/cubist_eval_model.rds")
 saveRDS(cubist_tune,      "../output/cubist_tune_results.rds")
@@ -255,5 +318,6 @@ write_csv(test_metrics,   "../output/cubist_test_metrics.csv")
 write_csv(train_metrics,   "../output/cubist_train_metrics.csv")
 
 cat("Cubist script complete\n")
+
 ```
 
