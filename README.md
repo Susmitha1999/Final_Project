@@ -95,8 +95,93 @@ Missing values assigned explicit "unknown" factor level.
 
 ## EDA Section
 
+1. In this section, we explored the structure, distribution, and relationships within the dataset to better understand the factors influencing yield and to guide feature engineering and model selection.
+
+2. We began by examining the distribution of the response variable (yield_mg_ha), where we observed a roughly normal, bell-shaped pattern centered around 10 Mg/ha. 
+This indicated that the data was well-behaved and did not require transformation. The density plot confirmed this pattern, showing a smooth and symmetric distribution with only a few extreme values.
+
+3. Next, We analyzed temporal trends by looking at mean yield across years. We observed clear year-to-year variability, including a dip around 2016 and a peak near 2019. 
+This suggested that environmental conditions vary significantly by year and likely play an important role in yield outcomes.
+
+4. We then explored spatial and site-level variability. The boxplots of yield by site showed substantial differences in both median yield and spread, indicating that location-specific factors strongly influence performance. 
+Similarly, mapping yield across latitude and longitude revealed suggests some geographic variation in yield, though the patterns are not strongly clustered. 
+We also examined elevation and found a shows a weak nonlinear relationship, with slight variation across elevation levels. 
+
+5. To understand management effects, we examined yield by previous crop, where we found noticeable differences across crop types. 
+Some crops were associated with higher median yields, suggesting that crop rotation may influence productivity.
+
+6. We also investigated the distribution of weather and soil variables, which showed a range of shapes, including skewed and tightly clustered distributions. This indicated that environmental conditions are diverse across sites and years. 
+When we plotted yield against these variables, we observed mostly nonlinear relationships, particularly for weather variables such as temperature and rainfall. 
+This supported the use of a flexible model like XGBoost that can capture complex interactions.
+
+7. We further explored growing degree days (GDD) and found a weak but nonlinear relationship with yield, suggesting that while GDD is relevant, it is not a dominant predictor on its own.
+
+8. The correlation heatmap revealed strong relationships among weather variables, indicating potential multicollinearity, while yield showed only moderate correlation with individual predictors. 
+This again supported the need for a model capable of handling correlated and interacting features.
+
+9. Finally, the distribution of hybrids across sites showed that most hybrids appear in a moderate number of environments, while a few are tested very widely. 
+
+**Feature Engineering**
+10. We created additional variables to better capture important patterns in the data.
+
+11. We converted year into a factor so the model could account for year-to-year differences instead of assuming a linear trend. 
+
+13. We also transformed the planting and harvest dates into proper date formats, which allowed me to extract the day of year for planting and harvest (do-_planted and doy_harvested).
+
+12. Using these, we also created a new variable called season length, calculated as the difference between harvest and planting dates. This represents the total growing period and is an important agronomic factor that can influence yield.
+
+13. Finally, saved the enhanced dataset (training_fe.csv) so it could be consistently used in our model selection and analysis.
+
 ## Model-1 XGBoost
 
+**Data Preparation**
+1. Imported the training_fe.csv dataset containing engineered predictors and cleaned column names for consistency.
+
+2. Ensured variables were in appropriate formats and retained all observations for modeling after prior feature engineering.
+
+3. The dataset contained 150,510 observations.
+
+**Data Split**
+4. Performed a 70/30 split of the dataset into training and test sets, stratified by yield_mg_ha to preserve the distribution of the predictot variable.
+
+5. Train set has 105,354 rows and 28 columns while test set has 45,156 rows and 28 columns for model evaluation.
+
+**Preprocessing**
+6. Removed raw date variables (date_planted, date_harvested) since relevant temporal information had already been captured through engineered features.
+
+7. Handled unseen categorical levels using step_novel() and grouped infrequent hybrid categories using step_other() to reduce sparsity.
+
+8. Applied step_zv() to eliminate predictors with no variability and used one-hot encoding (step_dummy()) with sparse representation to efficiently convert categorical variables into numeric format for XGBoost.
+
+**Hyperparameter Tuning**
+9. Tuned multiple XGBoost parameters, including number of trees, tree depth, minimum observations per node, learning rate, loss reduction, sample size, and feature subsampling (mtry).
+
+10. Generated a space-filling grid of 20 parameter combinations to explore the hyperparameter space efficiently.
+
+11. Initially used 10-fold cross-validation, but the tuning process was computationally  infeasible and ran for an extended period without completing. 
+To improve efficiency, reduced the resampling to 3-fold cross-validation, which significantly decreased runtime while still providing reliable performance estimates.
+
+12. Also tested 5-fold cross-validation to assess whether additional folds would improve model performance. However, the results indicated that the 3-fold configuration produced slightly better predictive performance, so it was retained for the final model.
+
+13. Applied a racing method (tune_race_anova) to eliminate poorly performing configurations early, improving computational efficiency.
+
+14. Selected the optimal hyperparameter combination based on the lowest RMSE.
+
+**Model Fitting**
+15. Finalized the workflow using the best-performing hyperparameters identified during tuning.
+
+16. Evaluated the model using last_fit() on the 30% splitted test set to obtain unbiased performance estimates.
+
+17. Trained a final version of the model on the full training dataset (2014 - 2023) for generating predictions and model interpretation.
+
+**Results**
+18. The optimal hyperparameters were selected based on minimizing RMSE during cross-validation.
+
+19. On the 30% test set, the XGBoost model achieved an RMSE of 1.88 Mg/ha, R² of 0.63, and MAE of 1.43 Mg/ha.
+
+20. Training set performance was slightly better than test performance with RMSE of 1.83 Mg/ha, R² of 0.65, and MAE of 1.39 Mg/ha
+
+21. Overall, the model explained approximately 63% of the variation in yield across site, year, and hybrid.
 
 ## Model-2 Cubist
 

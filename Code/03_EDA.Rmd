@@ -14,18 +14,16 @@ knitr::opts_chunk$set(echo = TRUE)
 #| message: false
 #| warning: false
 
-
-
 # Loading packages
-library(tidyverse) # for data wrangling and plotting
-library(janitor) # clean column names
-library(lmerTest) # for mixed-effect modeling
-library(broom.mixed) # for residual diagnostics
-library(knitr) # for figure displaying
-library(nlme) # for non-linear modeling
+library(tidyverse) 
+library(janitor) 
+library(lmerTest)
+library(broom.mixed) 
+library(knitr) 
+library(nlme)
 library(car)
-library(nlraa) # for starting value functions
-library(metrica) # for rmse
+library(nlraa) 
+library(metrica)
 
 ```
 
@@ -261,7 +259,7 @@ training_fe <- traindata %>%
     doy_harvested = yday(date_harvested),
 
     # Season length (growing period)
-    season_length = doy_harvested - doy_planted
+    season_length = as.numeric(doy_harvested - doy_planted)
   )
 
 training_fe
