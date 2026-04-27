@@ -1,0 +1,389 @@
+---
+title: "xgboost"
+output: html_document
+date: "2026-04-23"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Packages
+```{r}
+#| message: false
+#| warning: false
+#install.packages("xgboost") #new pacakage
+#install.packages("doParallel")
+#install.packages("embed")
+library(tidymodels) 
+library(finetune)     
+library(vip)      
+library(xgboost)    
+library(ranger)     
+library(tidyverse)    
+library(doParallel) 
+library(caret)
+library(embed)
+```
+
+
+#Load data
+
+```{r}
+training <- read.csv("../data/training/training_fe.csv") %>%
+  janitor::clean_names()
+
+training
+
+```
+
+#Pre-processing
+
+```{r}
+set.seed(931)
+training_split <- initial_split(training, 
+  prop = .7, 
+  strata = yield_mg_ha  # Stratify by target variable
+  )
+
+training_split
+```
+
+##data split
+
+```{r}
+data_train <- training(training_split)  # 70% of data
+data_train #Training data frame
+```
+
+```{r}
+data_test <- testing(training_split)  # 30% of data
+data_test #Testing data frame
+```
+
+#removing raw dates before recipe
+```{r}
+data_train2 <- data_train %>% 
+  select(-date_planted, -date_harvested)
+
+data_test2 <- data_test %>% 
+  select(-date_planted, -date_harvested)
+```
+
+
+##Creating Recipe
+```{r}
+# Recipe
+xgb_recipe <- recipe(yield_mg_ha ~ ., data = data_train2) %>%
+  step_string2factor(all_nominal_predictors()) %>%
+  step_unknown(all_nominal_predictors(), new_level = "missing") %>%
+  step_novel(all_nominal_predictors()) %>%
+  step_other(hybrid, threshold = 0.001) %>%   # 🔥 reduced threshold
+  step_zv(all_predictors()) %>%
+  step_dummy(all_nominal_predictors(), sparse = "yes")
+
+xgb_recipe
+
+```
+
+#Training model
+##Model Specification
+
+```{r}
+xgb_model <- boost_tree(
+  trees = tune(),
+  tree_depth = tune(),
+  min_n = tune(),
+  learn_rate = tune(),
+  loss_reduction = tune(),
+  sample_size = tune(),
+  mtry = tune(),
+  stop_iter = 25
+) %>%
+  set_engine(
+    "xgboost",
+    validation = 0.1,
+    counts = FALSE,
+    verbose = 0
+  ) %>%
+  set_mode("regression")
+
+xgb_model
+```
+
+#creating workflow
+```{r}
+
+xgb_wf <- workflow() %>%
+  add_recipe(xgb_recipe) %>%
+  add_model(xgb_model)
+
+xgb_wf
+
+```
+
+```{r}
+set.seed(250)
+resampling_foldcv <- vfold_cv(data_train2, v = 5)
+
+resampling_foldcv
+```
+
+#Setting parameters and grid
+```{r}
+
+# Parameter set
+xgb_params <- extract_parameter_set_dials(xgb_wf) %>%
+  update(
+    mtry = mtry_prop(range = c(0.15, 0.35)),
+    learn_rate = learn_rate(range = c(-3.5, -2.2)),  # ~0.03–0.11
+    tree_depth = tree_depth(range = c(4L, 8L)),
+    trees = trees(range = c(400L, 900L))
+  )
+
+xgb_params
+
+# Grid
+set.seed(250)
+xgb_grid <- grid_space_filling(
+  xgb_params,
+  size = 20
+)
+
+xgb_grid
+```
+```{r}
+names(data_train2)
+```
+
+
+#Model Tuning
+```{r}
+# Parallel setup
+cl <- makePSOCKcluster(parallel::detectCores() - 1)
+registerDoParallel(cl)
+
+# Tune model
+set.seed(7644)
+
+xgb_result <- tune_race_anova(
+  object = xgb_wf,
+  resamples = resampling_foldcv,
+  grid = xgb_grid,
+  control = control_race(
+    burn_in = 2,
+    save_pred = FALSE,
+    verbose_elim = TRUE
+  )
+)
+
+# Stop parallel
+stopCluster(cl)
+registerDoSEQ()
+
+# Alert
+beepr::beep()
+```
+
+
+```{r}
+show_notes(xgb_result)
+```
+
+
+```{r}
+plot_race(xgb_result)
+```
+
+
+```{r}
+collect_metrics(xgb_result)
+```
+```{r}
+# Based on lowest RMSE
+best_rmse <- xgb_result %>% 
+  select_best(metric = "rmse")%>% 
+  mutate(source = "best_rmse")
+
+best_rmse
+```
+
+```{r}
+# Based on lowers RMSE within 1% loss
+best_rmse_pct_loss <- xgb_result %>% 
+  select_by_pct_loss(
+    metric = "rmse",
+    limit = 1,
+    min_n
+  ) %>% 
+  mutate(source = "best_rmse_pct_loss")
+
+best_rmse_pct_loss
+```
+
+
+```{r}
+# Based on lowest RMSE within 1 se
+best_rmse_one_std_err <- xgb_result %>% 
+  select_by_one_std_err(
+    metric = "rmse",
+    desc(trees)
+  ) %>% 
+  mutate(source = "best_rmse_one_std_err")
+
+best_rmse_one_std_err
+```
+
+
+```{r}
+# Based on greatest R2
+best_r2 <- xgb_result %>% 
+  select_best(metric = "rsq")%>% 
+  mutate(source = "best_r2")
+
+best_r2
+```
+
+
+```{r}
+# Based on lowers R2 within 1% loss
+best_r2_pct_loss <- xgb_result %>% 
+  select_by_pct_loss(
+    metric = "rsq",
+    limit = 1,
+    min_n
+  ) %>% 
+  mutate(source = "best_r2_pct_loss")
+
+best_r2_pct_loss
+```
+
+```{r}
+# Based on lowest R2 within 1 se
+best_r2_one_std_error <- xgb_result %>% 
+  select_by_one_std_err(
+    metric = "rsq",
+    desc(trees)
+  ) %>%
+  mutate(source = "best_r2_one_std_error")
+
+best_r2_one_std_error
+```
+
+
+```{r}
+#Comparing and finalizing model
+best_rmse %>% 
+  bind_rows(best_rmse_pct_loss, 
+            best_rmse_one_std_err, 
+            best_r2, 
+            best_r2_pct_loss, 
+            best_r2_one_std_error)
+
+```
+
+
+```{r}
+final_spec <- boost_tree(
+  trees = best_rmse$trees,
+  tree_depth = best_rmse$tree_depth,
+  min_n = best_rmse$min_n,
+  learn_rate = best_rmse$learn_rate,
+  loss_reduction = best_rmse$loss_reduction,
+  sample_size = best_rmse$sample_size,
+  mtry = best_rmse$mtry
+) %>%
+  set_engine(
+    "xgboost",
+    validation = 0.1,
+    counts = FALSE,
+    verbose = 0
+  ) %>%
+  set_mode("regression")
+
+final_spec
+```
+
+
+```{r}
+final_wf <- workflow() %>%
+  add_recipe(xgb_recipe) %>%
+  add_model(final_spec)
+
+set.seed(10)
+final_fit <- last_fit(
+  final_wf,
+  split = training_split
+)
+
+final_fit %>%
+  collect_predictions()
+```
+
+```{r}
+final_fit %>%
+  collect_metrics()
+```
+
+```{r}
+best_rmse <- select_best(xgb_result, metric = "rmse")
+
+final_wf <- finalize_workflow(xgb_wf, best_rmse)
+
+final_fit <- last_fit(final_wf, split = training_split)
+
+collect_metrics(final_fit)
+```
+
+```{r}
+# finalize workflow with best RMSE params
+final_xgb_wf <- finalize_workflow(
+  xgb_wf,
+  select_best(xgb_result, metric = "rmse")
+)
+
+# fit on full training set
+final_fit <- fit(final_xgb_wf, data = data_train)
+
+# training set predictions
+train_preds <- predict(final_fit, new_data = data_train) %>%
+  bind_cols(data_train %>% select(yield_mg_ha))
+
+# training RMSE and R2
+train_preds %>%
+  metrics(truth = yield_mg_ha, estimate = .pred)
+
+train_preds %>%
+  rmse(truth = yield_mg_ha, estimate = .pred)
+
+train_preds %>%
+  rsq(truth = yield_mg_ha, estimate = .pred)
+```
+
+#Predicted vs Observed Plot
+```{r}
+final_fit %>%
+  collect_predictions() %>%
+  ggplot(aes(x = yield_mg_ha, y = .pred)) +
+  geom_point(alpha = 0.4) +
+  geom_abline(color = "red", linetype = "dashed") +
+  geom_smooth(method = "lm", color = "blue") +
+  coord_equal() +
+  labs(title = "Xgboost: Predicted vs Actual Yield",
+       x = "Observed Yield (Mg/ha)",
+       y = "Predicted Yield (Mg/ha)")
+```
+
+#Variable Importance
+```{r}
+xgb_fit <- final_fit %>%
+  extract_fit_parsnip()
+
+vip(xgb_fit) +
+  theme_minimal()
+
+```
+
+
+
+

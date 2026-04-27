@@ -1,0 +1,4 @@
+.metric,.estimator,.estimate,.config
+rmse,standard,1.8821283148723078,pre0_mod0_post0
+rsq,standard,0.6307738669197771,pre0_mod0_post0
+mae,standard,1.4279108620404493,pre0_mod0_post0
