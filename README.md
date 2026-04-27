@@ -122,6 +122,7 @@ This again supported the need for a model capable of handling correlated and int
 9. Finally, the distribution of hybrids across sites showed that most hybrids appear in a moderate number of environments, while a few are tested very widely. 
 
 **Feature Engineering**
+
 10. We created additional variables to better capture important patterns in the data.
 
 11. We converted year into a factor so the model could account for year-to-year differences instead of assuming a linear trend. 
@@ -142,11 +143,13 @@ This again supported the need for a model capable of handling correlated and int
 3. The dataset contained 150,510 observations.
 
 **Data Split**
+
 4. Performed a 70/30 split of the dataset into training and test sets, stratified by yield_mg_ha to preserve the distribution of the predictot variable.
 
 5. Train set has 105,354 rows and 28 columns while test set has 45,156 rows and 28 columns for model evaluation.
 
 **Preprocessing**
+
 6. Removed raw date variables (date_planted, date_harvested) since relevant temporal information had already been captured through engineered features.
 
 7. Handled unseen categorical levels using step_novel() and grouped infrequent hybrid categories using step_other() to reduce sparsity.
@@ -154,6 +157,7 @@ This again supported the need for a model capable of handling correlated and int
 8. Applied step_zv() to eliminate predictors with no variability and used one-hot encoding (step_dummy()) with sparse representation to efficiently convert categorical variables into numeric format for XGBoost.
 
 **Hyperparameter Tuning**
+
 9. Tuned multiple XGBoost parameters, including number of trees, tree depth, minimum observations per node, learning rate, loss reduction, sample size, and feature subsampling (mtry).
 
 10. Generated a space-filling grid of 20 parameter combinations to explore the hyperparameter space efficiently.
@@ -168,6 +172,7 @@ To improve efficiency, reduced the resampling to 3-fold cross-validation, which 
 14. Selected the optimal hyperparameter combination based on the lowest RMSE.
 
 **Model Fitting**
+
 15. Finalized the workflow using the best-performing hyperparameters identified during tuning.
 
 16. Evaluated the model using last_fit() on the 30% splitted test set to obtain unbiased performance estimates.
@@ -175,6 +180,7 @@ To improve efficiency, reduced the resampling to 3-fold cross-validation, which 
 17. Trained a final version of the model on the full training dataset (2014 - 2023) for generating predictions and model interpretation.
 
 **Results**
+
 18. The optimal hyperparameters were selected based on minimizing RMSE during cross-validation.
 
 19. On the 30% test set, the XGBoost model achieved an RMSE of 1.88 Mg/ha, R² of 0.63, and MAE of 1.43 Mg/ha.
