@@ -1,7 +1,7 @@
 ---
-title: "Xgboost"
+title: "xgboost"
 output: html_document
-date: "2026-04-16"
+date: "2026-04-23"
 ---
 
 ```{r setup, include=FALSE}
@@ -14,21 +14,25 @@ knitr::opts_chunk$set(echo = TRUE)
 #| warning: false
 #install.packages("xgboost") #new pacakage
 #install.packages("doParallel") #new pacakage
-library(tidymodels)   # Core framework for modeling (includes recipes, workflows, parsnip, etc.)
-library(finetune)     # Additional tuning strategies (e.g., racing, ANOVA-based tuning)
-library(vip)          # For plotting variable importance from fitted models
-library(xgboost)      # XGBoost implementation in R
-library(ranger)       # Fast implementation of Random Forests
-library(tidyverse)    # Data wrangling and visualization
-library(doParallel)   # For parallel computing (useful during resampling/tuning)
-library(caret)       # Other great library for Machine Learning 
+library(tidymodels)   
+library(finetune)     
+library(vip)         
+library(xgboost)      
+library(ranger)       
+library(tidyverse)  
+library(doParallel)   
+library(caret)    
+library(yardstick)
 ```
+
 
 #Load data
 
 ```{r}
 training <- read.csv("../data/training/training_fe.csv") %>%
   janitor::clean_names()
+
+training
 
 ```
 
@@ -38,64 +42,50 @@ training <- read.csv("../data/training/training_fe.csv") %>%
 set.seed(931)
 training_split <- initial_split(training, 
   prop = .7, 
-  strata = yield_mg_ha  # Stratify by target variable
+  strata = yield_mg_ha
   )
 
 training_split
 ```
 
-##data split
-
+#Data Splitting
+##Training Data
 ```{r}
-data_train <- training(training_split)  # 70% of data
-data_train #Training data frame
+data_train <- training(training_split)
+data_train 
 ```
 
-
+##Test Data
 ```{r}
 data_test <- testing(training_split)  # 30% of data
 data_test #Testing data frame
 ```
 
-
-##Distribution of target variable
+#Remove Raw Date Variables
 ```{r}
-ggplot() +
-  geom_density(data = data_train, 
-               aes(x = yield_mg_ha),
-               color = "red") +
-  geom_density(data = data_test, 
-               aes(x = yield_mg_ha),
-               color = "blue")
-```
-
-#removing raw dates before recipe
-```{r}
-data_train <- data_train %>% 
+data_train2 <- data_train %>% 
   select(-date_planted, -date_harvested)
 
-data_test <- data_test %>% 
+data_test2 <- data_test %>% 
   select(-date_planted, -date_harvested)
 ```
 
 
-##Creating Recipe
+#Recipe Creation
 ```{r}
-xgb_recipe <- recipe(yield_mg_ha~ ., data = data_train) %>%
-  step_novel(all_nominal_predictors()) %>% 
-  step_dummy(all_nominal_predictors()) %>%    # convert factors to numeric
-  step_zv(all_predictors())%>%
-  step_normalize(all_numeric_predictors())
+# Recipe
+xgb_recipe <- recipe(yield_mg_ha ~ ., data = data_train2) %>%
+  step_novel(all_nominal_predictors()) %>%                  
+  step_other(hybrid, threshold = 0.01) %>%              
+  step_zv(all_predictors()) %>%                           
+  step_dummy(all_nominal_predictors(), sparse = "yes")
 
 
 xgb_recipe
-
 ```
 
 
-#Training model
-##Model Specification
-
+#Model Specification
 ```{r}
 xgb_model <- boost_tree(
   trees = tune(),
@@ -104,138 +94,108 @@ xgb_model <- boost_tree(
   learn_rate = tune(),
   loss_reduction = tune(),
   sample_size = tune(),
-  mtry = tune()
+  mtry = tune(),
+  stop_iter = 25
 ) %>%
-  set_engine("xgboost") %>%
-  set_mode("regression")  
+  set_engine(
+    "xgboost",
+    validation = 0.1,
+    counts = FALSE,
+    verbose = 0
+  ) %>%
+  set_mode("regression")
 
 xgb_model
 ```
-This is the initial cross validation. The alternatives codes are below incase the model tuning run slow for you.
-##Cross Validation Setup
-```{r}
-set.seed(250)
-# Create 10-fold cross-validation resampling object from training data
-resampling_foldcv <- vfold_cv(data_train, 
-                              v = 10)
 
-resampling_foldcv
-resampling_foldcv$splits[[1]]
+#Workflow Setup
+```{r}
+# Workflow
+xgb_wf <- workflow() %>%
+  add_recipe(xgb_recipe) %>%
+  add_model(xgb_model)
+
+xgb_wf
+
 ```
 
-##Hyperparameter grid with Latin Hypercube Sampling
+#3-Fold Cross-Validation Setup
 ```{r}
-xgb_grid <- grid_latin_hypercube(
-  tree_depth(),
-  min_n(),
-  learn_rate(),
-  loss_reduction(),
-  sample_size = sample_prop(),
-  finalize(mtry(), data_train),
-  trees(),
-  size = 100
+set.seed(250)
+resampling_foldcv <- vfold_cv(data_train2, v = 3)
+
+resampling_foldcv
+```
+
+#Hyperparameter Grid
+```{r}
+# Parameter set
+xgb_params <- extract_parameter_set_dials(xgb_wf) %>%
+  update(
+    mtry = mtry_prop(range = c(0.05, 0.50)),
+trees = trees(range = c(200L, 800L))
+  )
+
+xgb_params
+
+# Grid
+set.seed(250)
+xgb_grid <- grid_space_filling(
+  xgb_params,
+  size = 20
 )
 
 xgb_grid
 ```
 
-
-```{r}
-ggplot(data = xgb_grid,
-       aes(x = tree_depth, 
-           y = min_n)) +
-  geom_point(aes(color = factor(learn_rate),
-                 size = trees),
-             alpha = .5,
-             show.legend = FALSE)
-```
-
 #Model Tuning
 ```{r}
+# Parallel setup
+cl <- makePSOCKcluster(parallel::detectCores() - 1)
+registerDoParallel(cl)
+
+# Tune model
 set.seed(7644)
-registerDoParallel(cores = parallel::detectCores() -1)
 
-xgb_result <- tune_race_anova(object = xgb_model,
-                      preprocessor = xgb_recipe,
-                      resamples = resampling_foldcv,
-                      grid = xgb_grid,
-                      control = control_race(save_pred = TRUE))
+xgb_result <- tune_race_anova(
+  object = xgb_wf,
+  resamples = resampling_foldcv,
+  grid = xgb_grid,
+  control = control_race(
+    burn_in = 2,
+    save_pred = FALSE,
+    verbose_elim = TRUE
+  )
+)
 
-stopImplicitCluster()
+# Stop parallel
+stopCluster(cl)
+registerDoSEQ()
 
-
+# Alert
 beepr::beep()
-xgb_result$.metrics[[2]]
 ```
 
-Specified the alternatives codes below to tune the model faster
-#Alternative cross validation
+
+#Checking tuning results
 ```{r}
-set.seed(250)
-# Create 5-fold cross-validation resampling object from training data
-resampling_foldcv2 <- vfold_cv(data_train, 
-                              v = 5)
-
-resampling_foldcv2
-resampling_foldcv2$splits[[1]]
+show_notes(xgb_result)
 ```
 
-
-#Alternative hyperparameter
+#Racing Plot
 ```{r}
-xgb_grid2 <- grid_space_filling(
-  tree_depth(range = c(3, 8)),
-  min_n(range = c(5, 40)),
-  learn_rate(range = c(0.01, 0.2)),
-  loss_reduction(),
-  sample_size = sample_prop(range = c(0.5, 0.9)),
-  finalize(mtry(), data_train),
-  trees(range = c(200, 800)),
-  size = 30
-)
+plot_race(xgb_result)
 
+ggsave("../output/xgboost_tuning_plot.png", width = 8, height = 5, dpi = 300)
 ```
 
-#Faster parallel setting and racing control
-```{r}
-registerDoParallel(cores = 4)
-
-ctrl <- control_race(
-  save_pred = FALSE,
-  verbose_elim = TRUE,
-  parallel_over = "resamples"
-)
-
-
-```
-
-#Alternative model tuning
-```{r}
-set.seed(7645)
-
-xgb_result2 <- tune_race_anova(
-  object = xgb_model,
-  preprocessor = xgb_recipe,
-  resamples = resampling_foldcv2,
-  grid = xgb_grid2,
-  control = ctrl
-)
-
-stopImplicitCluster()
-beepr::beep()
-
-```
-
-
-#Review tuning results
-
+#Tuning Metrics
 ```{r}
 collect_metrics(xgb_result)
 ```
 
-#Select best models
+#Best RMSE Selection
 ```{r}
-# Based on lowest RMSE
 best_rmse <- xgb_result %>% 
   select_best(metric = "rmse")%>% 
   mutate(source = "best_rmse")
@@ -243,34 +203,34 @@ best_rmse <- xgb_result %>%
 best_rmse
 ```
 
+
+#Based on lowest RMSE within 1% loss
 ```{r}
-# Based on lowers RMSE within 1% loss
 best_rmse_pct_loss <- xgb_result %>% 
-  select_by_pct_loss("min_n",
-                     metric = "rmse",
-                     limit = 1
-                     )%>% 
+  select_by_pct_loss(
+    metric = "rmse",
+    limit = 1,
+    min_n
+  ) %>% 
   mutate(source = "best_rmse_pct_loss")
 
 best_rmse_pct_loss
-
 ```
 
-
+#Based on lowest RMSE within 1 se
 ```{r}
-# Based on lowest RMSE within 1 se
 best_rmse_one_std_err <- xgb_result %>% 
-  select_by_one_std_err(metric = "rmse",
-                        eval_time = 100,
-                        trees
-                        )%>% 
+  select_by_one_std_err(
+    metric = "rmse",
+    desc(trees)
+  ) %>% 
   mutate(source = "best_rmse_one_std_err")
 
 best_rmse_one_std_err
 ```
 
+#Best R-Squared Selection
 ```{r}
-# Based on greatest R2
 best_r2 <- xgb_result %>% 
   select_best(metric = "rsq")%>% 
   mutate(source = "best_r2")
@@ -278,32 +238,33 @@ best_r2 <- xgb_result %>%
 best_r2
 ```
 
-
+#Based on lowers R2 within 1% loss
 ```{r}
-# Based on lowers R2 within 1% loss
 best_r2_pct_loss <- xgb_result %>% 
-  select_by_pct_loss("min_n",
-                     metric = "rsq",
-                     limit = 1
-                     ) %>% 
+  select_by_pct_loss(
+    metric = "rsq",
+    limit = 1,
+    min_n
+  ) %>% 
   mutate(source = "best_r2_pct_loss")
 
 best_r2_pct_loss
 ```
 
+
+#Based on lowest R2 within 1 se
 ```{r}
-# Based on lowest R2 within 1 se
 best_r2_one_std_error <- xgb_result %>% 
-  select_by_one_std_err(metric = "rsq",
-                        eval_time = 100,
-                        trees
-                        ) %>%
+  select_by_one_std_err(
+    metric = "rsq",
+    desc(trees)
+  ) %>%
   mutate(source = "best_r2_one_std_error")
 
 best_r2_one_std_error
 ```
 
-#Comparing and finalizing model
+#Model Comparison
 ```{r}
 best_rmse %>% 
   bind_rows(best_rmse_pct_loss, 
@@ -314,22 +275,191 @@ best_rmse %>%
 
 ```
 
-
-#Final Specification
+#Final Model Evaluation(Test Set)
 ```{r}
-final_spec <- boost_tree(
-  trees = best_r2$trees,           # Number of boosting rounds (trees)
-  tree_depth = best_r2$tree_depth, # Maximum depth of each tree
-  min_n = best_r2$min_n,           # Minimum number of samples to split a node
-  learn_rate = best_r2$learn_rate  # Learning rate (step size shrinkage)
+my_metrics <- metric_set(rmse, rsq, mae)
+best_rmse <- select_best(xgb_result, 
+                         metric = "rmse")
+
+final_wf <- finalize_workflow(xgb_wf, 
+                              best_rmse)
+
+final_fit <- last_fit(final_wf, 
+                      split = training_split,
+                      metrics = my_metrics
+                      )
+
+collect_metrics(final_fit)
+
+collect_predictions(final_fit)
+
+test_metrics <- collect_metrics(final_fit)
+
+write_csv(
+  test_metrics,
+  "../output/xgboost_test_metrics.csv"
+)
+```
+
+#Predicted vs Observed Plot
+```{r}
+final_fit %>%
+  collect_predictions() %>%
+  ggplot(aes(x = yield_mg_ha, y = .pred)) +
+  geom_point(alpha = 0.4) +
+  geom_abline(color = "red", linetype = "dashed") +
+  geom_smooth(method = "lm", color = "blue") +
+  coord_equal() +
+  labs(title = "Xgboost: Predicted vs Actual Yield",
+       x = "Observed Yield (Mg/ha)",
+       y = "Predicted Yield (Mg/ha)")
+
+ggsave("../output/xgboost_predicted_vs_actual_yield.png", width = 8, height = 5, dpi = 300)
+```
+
+
+
+#Training Set Performance
+```{r}
+# fit on full training data
+final_model <- fit(final_wf, data = data_train)
+
+# training set predictions
+train_preds <- predict(final_model, new_data = data_train) %>%
+  bind_cols(data_train %>%
+              select(yield_mg_ha))
+
+# training RMSE, R2, and MAE
+train_preds %>%
+  metrics(truth = yield_mg_ha, estimate = .pred)
+
+train_preds <- collect_metrics(final_fit)
+
+write_csv(
+  train_preds,
+  "../output/xgboost_train_metrics.csv"
+)
+```
+#Residual Plots
+```{r}
+test_preds<-
+  collect_predictions(final_fit)
+
+#Residual by site
+test_preds %>% 
+  bind_cols(data_test %>% select(site, year)) %>% 
+  mutate(residual = yield_mg_ha - .pred) %>% 
+  group_by(site) %>%
+  summarise(mean_residual = mean(residual), rmse = sqrt(mean(residual ^2))) %>%
+  write.csv("../output/xgboost_residuals_by_site.csv")
+
+#Residual by year
+test_preds %>% 
+  bind_cols(data_test %>% select(site, year)) %>% 
+  mutate(residual = yield_mg_ha - .pred) %>% 
+  group_by(year) %>%
+  summarise(mean_residual = mean(residual), rmse = sqrt(mean(residual ^2))) %>%
+  write.csv("../output/xgboost_residuals_by_year.csv")
+```
+
+
+#Variable Importance
+```{r}
+xgb_fit <- final_model %>%
+  extract_fit_parsnip()
+
+vip(xgb_fit) +
+  theme_minimal()
+
+ggsave("../output/xgboost_vip.png", width = 8, height = 5, dpi = 300)
+
+# save important variables as new dataframe
+xgboost_importance <- xgb_fit %>%
+  vi()
+
+write_csv(xgboost_importance, "../output/xgboost_importance.csv")
+
+```
+##2024 Test Set Prediction
+#Loading 2024 test set
+```{r}
+testing_2024<- read.csv("../data/testing/testing_final.csv")
+testing_2024
+```
+
+#Removing unavailable variables in test set 
+
+```{r}
+missing_2024_cols <- c(
+  "replicate",
+  "block",
+  "grain_moisture",
+  "soilp_h",
+  "year_factor",
+  "doy_planted",
+  "doy_harvested",
+  "season_length",
+  "date_planted",
+  "date_harvested"
+)
+
+training_2024_model <- training %>%
+  select(-any_of(missing_2024_cols))
+
+testing_2024_model <- testing_2024 %>%
+  select(-any_of(missing_2024_cols))
+
+```
+
+#Recreating recipe
+```{r}
+xgb_recipe_2024 <- recipe(yield_mg_ha ~ ., data = training_2024_model) %>%
+  step_novel(all_nominal_predictors()) %>%
+  step_other(hybrid, threshold = 0.01) %>%
+  step_zv(all_predictors()) %>%
+  step_dummy(all_nominal_predictors(), sparse = "yes")
+```
+
+#Finalizing Workflow
+```{r}
+xgb_wf_2024 <- workflow() %>%
+  add_recipe(xgb_recipe_2024) %>%
+  add_model(xgb_model)
+
+best_rmse <- select_best(xgb_result, metric = "rmse")
+
+final_wf_2024 <- finalize_workflow(
+  xgb_wf_2024,
+  best_rmse
+)
+```
+
+#Refit model on FULL 2014-2024 data
+```{r}
+final_fit_2024 <- fit(
+  final_wf_2024,
+  data = training_2024_model
+  )
+```
+
+
+#2024 Prediction
+```{r}
+predictions_2024 <- predict(
+  final_fit_2024,
+  new_data = testing_2024_model
 ) %>%
-  set_engine("xgboost") %>%
-  set_mode("regression")
+  bind_cols(testing_2024 %>% select(year, site, hybrid))
 
-final_spec
+head(predictions_2024)
+
+sum(is.na(predictions_2024$.pred))
+
+write_csv(
+  predictions_2024,
+  "../output/testing_final_pred_xgboost.csv"
+)
 ```
 
-```{r}
-knitr::purl("04_xgboost.rmd", output = "04_xgboost_script.R", documentation = 0)
-```
+
 
