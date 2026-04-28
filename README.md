@@ -303,4 +303,4 @@ To improve efficiency, reduced the resampling to 3-fold cross-validation, which 
 
 8. **2024 Predictions** — predicted yield distribution, mean predicted yield by site bar chart, and a searchable filterable table of all 10,057 predictions with site filter.
 
-9. The app is published at: [add URL after publishing]
+9. The app is published at: https://sk00413.shinyapps.io/CRSS_8030_App_SK_AE/
