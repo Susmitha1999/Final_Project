@@ -308,6 +308,7 @@ write_csv(predictions_2024, "../output/testing_final_pred.csv")
 ```
 
 
+
 # Save everything
 ```{r}
 
@@ -318,6 +319,92 @@ write_csv(test_metrics,   "../output/cubist_test_metrics.csv")
 write_csv(train_metrics,   "../output/cubist_train_metrics.csv")
 
 cat("Cubist script complete\n")
+
+```
+
+
+From, variable importance grain mositure is imp variable which is not available in testing dataset. So, trying to predict without grain mositure. 
+
+
+## Running without grain moisture
+
+```{r}
+# Define best params directly — no need to reload cubist_tune
+best_params <- tibble(committees = 20, neighbors = 9)
+
+# Refit final model WITHOUT grain_moisture
+final_recipe_no_gm <- recipe(yield_mg_ha ~ ., data = training_model) %>%
+  step_rm(date_planted, date_harvested, grain_moisture) %>%
+  step_zv(all_predictors())
+
+final_cubist_wf_no_gm <- workflow() %>%
+  add_recipe(final_recipe_no_gm) %>%
+  add_model(finalize_model(cubist_spec, best_params))
+
+final_cubist_fit_no_gm <- fit(final_cubist_wf_no_gm, data = training_model)
+
+```
+
+
+```{r}
+# Reload testing data
+testing <- read_csv("../data/testing/testing_final.csv") %>%
+  mutate(
+    previous_crop = as.factor(previous_crop),
+    year          = as.integer(year)
+  )
+
+# Add missing columns that training had but testing doesn't
+testing_pred <- testing %>%
+  mutate(
+    replicate      = NA_real_,
+    block          = NA_real_,
+    grain_moisture = NA_real_,
+    date_planted   = as.Date(NA),
+    date_harvested = as.Date(NA),
+    year_factor    = as.numeric(as.character(year)),
+    doy_planted    = NA_real_,
+    doy_harvested  = NA_real_,
+    season_length  = NA_real_,
+    previous_crop  = as.character(previous_crop),
+    previous_crop  = tolower(str_trim(previous_crop)),
+    previous_crop  = case_when(
+      str_detect(previous_crop, "soybean|soya") ~ "soybean",
+      str_detect(previous_crop, "corn")         ~ "corn",
+      str_detect(previous_crop, "wheat")        ~ "wheat",
+      str_detect(previous_crop, "sorghum")      ~ "sorghum",
+      str_detect(previous_crop, "cotton")       ~ "cotton",
+      str_detect(previous_crop, "peanut")       ~ "peanut",
+      str_detect(previous_crop, "clover")       ~ "other",
+      is.na(previous_crop)                      ~ "unknown",
+      TRUE                                      ~ previous_crop
+    ),
+    previous_crop = as.factor(previous_crop)
+  )
+
+predictions_2024 <- predict(final_cubist_fit_no_gm, testing_pred) %>%
+  bind_cols(testing %>% select(year, site, hybrid))
+
+cat("Mean:", mean(predictions_2024$.pred), "\n")
+cat("SD:",   sd(predictions_2024$.pred), "\n")
+cat("NAs:",  sum(is.na(predictions_2024$.pred)), "\n")
+
+write_csv(predictions_2024, "../output/testing_final_pred_Cubist_no_gm.csv")
+```
+
+## Submission file
+```{r}
+
+submission <- read_csv("../data/testing/testing_submission.csv")
+
+submission_filled <- submission %>%
+  left_join(predictions_2024 %>% select(year, site, hybrid, .pred),
+            by = c("year", "site", "hybrid")) %>%
+  mutate(yield_mg_ha = .pred) %>%
+  select(-`.pred`)
+
+sum(is.na(submission_filled$yield_mg_ha))
+write_csv(submission_filled, "../output/testing_submission_final.csv")
 
 ```
 

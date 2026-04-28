@@ -261,10 +261,46 @@ To improve efficiency, reduced the resampling to 3-fold cross-validation, which 
 
 ## Model Selection
 
+1. Both XGBoost and Cubist were evaluated on the same 30% holdout test set using identical stratified splits (set.seed 931) to ensure a fair comparison.
+
+2. Cubist outperformed XGBoost on all three evaluation metrics — RMSE (1.865 vs 1.882 Mg/ha), R² (0.638 vs 0.631), and MAE (1.415 vs 1.428 Mg/ha).
+
+3. Based on these results, Cubist was selected as the final model for generating 2024 yield predictions.
+
+4. The margin of improvement is modest but consistent across all metrics, suggesting Cubist's rule-based structure with nearest-neighbor adjustments captured yield variation slightly better than XGBoost's gradient boosting approach on this dataset.
 
 ## Final Yield Prediction on 2024 data
 
+1. The final Cubist model was refit on the complete 2014–2023 training dataset (150,509 rows) excluding grain_moisture, since that variable is measured at harvest and unavailable for 2024 predictions.
+
+2. The 2024 testing dataset contains 10,057 hybrid observations across 23 sites, all with yield recorded as NA.
+
+3. Missing columns in the 2024 testing data (replicate, block, date variables, season features) were filled with NA before prediction — Cubist handles missing values natively.
+
+4. Novel previous_crop levels in 2024 (Clover, Cotton, Peanut, Sorghum, Soybean, Wheat with different capitalization) were standardized to match training categories before prediction.
+
+5. All 10,057 predictions were generated with zero missing values.
+
+6. Mean predicted yield for 2024 is 11.19 Mg/ha (SD = 2.28 Mg/ha), with predictions ranging from 3.88 to 16.67 Mg/ha across sites.
+
+7. Final predictions were saved to testing_submission_final.csv with the original submission file structure preserved — only the yield_mg_ha column was filled.
 
 ## R-Shiny dashboard
 
+1. An interactive Shiny dashboard was built to communicate the full analysis pipeline from EDA through model results and 2024 predictions.
 
+2. The app is structured into six tabs — Yield Explorer, Environment Explorer, Model Comparison, Variable Importance, Final Model, and 2024 Predictions.
+
+3. **Yield Explorer** — interactive EDA on yield distribution, temporal trends, site-level variation, and previous crop effects with year and site filters.
+
+4. **Environment Explorer** — soil vs yield binned means with error bars, weather vs yield colored by year, site elevation vs mean yield, and an interactive correlation matrix where clicking any cell generates that scatterplot.
+
+5. **Model Comparison** — side-by-side predicted vs actual plots, RMSE by site, and RMSE by year for both Cubist and XGBoost, with Cubist clearly identified as winner.
+
+6. **Variable Importance** — color-coded horizontal bar chart by variable group (weather, soil, location, management, trial design) with toggle between Cubist and XGBoost importance and slider to control number of variables shown.
+
+7. **Final Model** — Cubist holdout test performance with predicted vs actual plot annotated with RMSE and R², residual distribution, RMSE by site, and RMSE by year.
+
+8. **2024 Predictions** — predicted yield distribution, mean predicted yield by site bar chart, and a searchable filterable table of all 10,057 predictions with site filter.
+
+9. The app is published at: [add URL after publishing]
