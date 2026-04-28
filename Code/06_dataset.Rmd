@@ -1,0 +1,36 @@
+---
+title: "testing submission"
+output: html_document
+date: "2026-04-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#| message: false
+#| warning: false
+library(tidyverse)
+```
+
+
+```{r}
+test_data <-read_csv("../output/testing_final_pred_Cubist.csv")
+
+names(test_data)
+```
+#Remaning and reordering
+```{r}
+final_dataset <- test_data %>%
+  rename(yield_mg_ha = .pred) %>%
+  select(year, site, hybrid, yield_mg_ha)
+
+final_dataset
+```
+
+#Saving dataset
+```{r}
+write_csv(final_dataset, "../output/testing_submission.csv")
+```
+
